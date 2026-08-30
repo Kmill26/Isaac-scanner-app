@@ -60,5 +60,4 @@ jobs:
           gh release delete latest --yes --cleanup-tag || true
           gh release create latest IsaacItemScanner.apk \
             --title "Latest build" \
-            --prerelease \
             --notes "Auto-built from \`main\` @ ${SHA_SHORT}. On your phone: tap **IsaacItemScanner.apk** below, open it, allow install from this source, Install. Works fully offline; a Gemini API key is optional. Debug-signed — updates install over the top."
