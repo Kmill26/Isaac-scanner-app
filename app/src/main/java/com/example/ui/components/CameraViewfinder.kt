@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import android.os.Build
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
@@ -652,7 +653,9 @@ private fun imageProxyToBitmap(image: ImageProxy): Bitmap? {
 
     // Pixel 10 Pro / Android 16 frequently hands back HARDWARE bitmaps, which cannot
     // be read back or cropped — copy to a software config first.
-    if (bmp.config == Bitmap.Config.HARDWARE) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+        bmp.config == Bitmap.Config.HARDWARE
+    ) {
         bmp = bmp.copy(Bitmap.Config.ARGB_8888, false) ?: return null
     }
 

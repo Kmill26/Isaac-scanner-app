@@ -8,6 +8,11 @@ sprite-only identification.
 
 Owner: Kenny (GitHub `Kmill26`). Repo: `Kmill26/Isaac-scanner-app`, branch `main`.
 
+**Status (P6 complete):** rebuild fully implemented and merged. `main` passes
+`:app:assembleDebug`, `:app:testDebugUnitTest` (17), and `:app:lintDebug` (0 errors).
+Never run on a physical device or emulator — camera / OCR / Gemini paths are code-reviewed
+only. See "Handoff to Codex" at the bottom for what's solid vs. what needs a real Pixel.
+
 ---
 
 ## Target architecture
@@ -60,75 +65,56 @@ Owner: Kenny (GitHub `Kmill26`). Repo: `Kmill26/Isaac-scanner-app`, branch `main
   `ExampleRobolectricTest` expected string to `"Isaac Item Scanner"`.
 
 **Local build:** `assembleDebug` — baseline (pre-fix) failed only at `validateSigningDebug`.
-Post-fix build status: <PENDING — see build2.log>.
+Post-fix build status: **BUILD SUCCESSFUL** (clean `:app:assembleDebug`). CI green.
 
-### IN PROGRESS
-- **Item dataset:** a research subagent is sourcing/normalizing the full item list into
-  `app/src/main/assets/isaac_items.json` (target 600–740 collectibles). Not yet committed.
+### DONE — the rebuild (P1–P6, all merged to `main`)
 
-### TODO — the rebuild (ordered)
-See `/private/tmp/.../scratchpad/synth-plan.md` for the full analysis; condensed:
+The whole rebuild described in the old TODO below is **implemented and committed**. Every
+phase ends on a green `./gradlew :app:assembleDebug :app:testDebugUnitTest`; the final
+state also passes `:app:lintDebug` with 0 errors. 17 unit tests (`CatalogTest`,
+`ScanEngineTest`, 2 example). Commits `4db0d43` (P1) → P6.
 
-1. **Data layer**
-   - `IsaacItemDatabase` → load from `assets/isaac_items.json` (keep the same public API:
-     `items`, `findItemByName`, `calculateSynergies`, `calculateTransformations`,
-     `getXboxPresets`). Parse with Moshi. Cache in a singleton / repository.
-   - `findItemByName`: word-boundary / token matching, ranked exact > token-equals > alias;
-     return a match-confidence so the UI can say "closest match" vs "exact". Current
-     substring match maps "Technology" → "Tech X" etc.
-   - Keep the 27 hand-authored synergy entries as an overlay on top of the bundled data.
-2. **OCR identification** (new `data/ocr/` package)
-   - `TextRecognizer` (ML Kit, Latin script, bundled). `suspend fun readItemName(bitmap): String?`
-   - Isaac's pedestal/pickup banner shows the item name in caps. OCR the reticle crop,
-     take the largest/most-central text block, normalise, fuzzy-match to the DB
-     (Levenshtein / token-set ratio, threshold ~0.8).
-   - Flow: `ScannerViewModel.scanBitmap` → OCR first (offline, ~200ms). If matched with
-     good confidence → show result immediately, no network. If not → if key present, call
-     Gemini vision; else show "couldn't read a name — move closer / fill the box / add an
-     API key for AI recognition".
-3. **Camera capture quality** (`CameraViewfinder.kt`) — the single biggest accuracy lever
-   - Crop the captured bitmap to the reticle rectangle before OCR/upload (shared constant
-     with the Canvas overlay). Currently the whole frame is sent and the sprite is ~30px.
-   - `imageProxyToBitmap`: handle `null` decode, `Config.HARDWARE` bitmaps (copy to
-     ARGB_8888), surface capture errors instead of `printStackTrace()`.
-   - Zoom: `setZoomRatio` bounded to `maxZoomRatio.coerceAtMost(8f)` (was `setLinearZoom`
-     mapping 1–5 onto the sensor's full 0.5–100x range). Add pinch-to-zoom.
-   - Tap-to-focus + spot metering on the reticle; EV slider / "TV mode" (negative EV) for
-     bright emissive screens. Replace the torch button (reflections ruin screen scans).
-   - Bump `bitmapToBase64` to 1024px / JPEG 90 now that it's a tight crop.
-4. **Gemini service** (`data/gemini/`)
-   - Model `gemini-2.5-flash` (current), path `v1beta/models/{model}:generateContent`,
-     key as `x-goog-api-key` header (not `?key=`), `HttpLoggingInterceptor` only in
-     `BuildConfig.DEBUG`.
-   - Structured output: `responseMimeType=application/json` + `responseSchema`,
-     `thinkingConfig.thinkingBudget=0`. Parse a typed `ScanPayload`.
-   - **Delete `fallbackLocalScan()`** and the `?: items.first()` coalesce. Throw a typed
-     `ScanException` (NoApiKey / NoItemDetected / RateLimited / ServerError / Network /
-     BadResponse); `ScannerViewModel` already catches → `scanErrorMessage`. Render it.
-   - `Response<GenerateContentResponse>` so error bodies are readable; map 429/5xx; one
-     retry on 429/503 honouring `RetryInfo`.
-5. **UI / navigation / insets**
-   - `ScannerUiState.currentRunItems` default `emptyList()` (was a fake seeded "Soy Milk").
-   - Persist active run (tiny Room table or DataStore) across process death; "Resume run?"
-     on cold start.
-   - `MainActivity`: `BackHandler` to return to tab 0 instead of exiting;
-     `enableEdgeToEdge` with transparent bars + `statusBarsPadding()` on each screen root;
-     remove `contentWindowInsets = WindowInsets(0,0,0,0)` and the hardcoded top spacers.
-   - `ScanResultCard` capped ~45% height + scroll so the viewfinder stays visible; add a
-     one-tap "Rescan".
-   - Button contrast (dark maroon on crimson ≈ 3:1 everywhere) — drop the `contentColor`
-     overrides, let Material use `onPrimary` (already white).
-   - `items(list, key = { it.id })` on every lazy list. Empty state in the Compendium when
-     filters match nothing. Remove impossible filter chips.
-   - Permission flow: don't auto-launch on first composition; "Open Settings" path on
-     permanent denial; re-check on `ON_RESUME`.
-   - Gate the "Xbox preset" test scaffolding + `createSyntheticConsoleBitmap` behind
-     `BuildConfig.DEBUG`.
-   - Wire or delete the dead `isAutoScanEnabled` toggle (recommend delete).
-6. **Housekeeping** — drop `KotlinJsonAdapterFactory`/kotlin-reflect (codegen already
-   wired), real Room migrations (or `fallbackToDestructiveMigrationFrom` pre-release only),
-   remove deprecated `Divider` import, fill in `Type.kt` typography, ≥48dp touch targets,
-   `contentDescription` on emoji icons.
+- **P1 — Data layer.** `IsaacItemDatabase` is now a façade over `assets/isaac_items.json`
+  (721 collectibles) parsed with codegen Moshi in `data/catalog/`. Public API unchanged
+  (`items`, `findItemByName`, `calculateSynergies`, `calculateTransformations`,
+  `getXboxPresets`) + new `match()` / `itemById()`. `NameMatcher`: ranked exact >
+  token-containment > Levenshtein/token-set ≥ 0.82 > curated alias map; returns `null`
+  rather than an arbitrary item. The 27 hand-authored synergies are overlaid by name.
+  Catalog is warmed on a daemon thread from `IsaacApp.onCreate` (registered in the manifest).
+- **P2 — Scan engine.** `data/ocr/ItemTextRecognizer` (bundled ML Kit Latin model, no Play
+  Services) + `data/scan/ScanEngine` (OCR-first, Gemini demoted to optional fallback).
+  `identify()` returns a sealed `ScanOutcome` (`Identified` / `Unrecognized` /
+  `NeedCloserLook` / `Failed`). Gemini rewritten: `gemini-2.5-flash`, `x-goog-api-key`
+  header, structured `responseSchema`, `thinkingBudget=0`, `Response<…>` error bodies,
+  one retry on 429/503 honouring `RetryInfo`, typed `ScanException`. **No `fallbackLocalScan`,
+  no `items.random()` / `items.first()` coalesce anywhere.** `moshi-kotlin` (reflection) removed.
+- **P3 — Camera.** Capture is cropped to the shared `ScanReticle` rectangle before OCR.
+  `imageProxyToBitmap` handles null decode + `Config.HARDWARE` (guarded ≥ API 26) + rotation;
+  capture failures surface through an `onCaptureError` callback (main thread) instead of
+  `printStackTrace`. Real `setZoomRatio` bounded to `maxZoomRatio` (≤ 8×) + pinch-to-zoom,
+  tap-to-focus/metering, "TV mode" negative-EV toggle (torch removed). `UseCaseGroup` +
+  `ViewPort` so the capture buffer matches the preview crop.
+- **P4 — Wiring.** `ScannerViewModel.scanBitmap` drives a real state machine off
+  `ScanOutcome`; every branch has a user-facing message and no branch shows a fabricated
+  item. On-demand "Get AI verdict" button (hidden unless a real key is configured). Active
+  run persists across process death via `data/prefs/RunStore` (DataStore, CSV of catalog
+  ids) with a "Resume run? / Start fresh" banner on cold start. `scanXboxPreset` resolves
+  through the catalog or errors — the synthetic-bitmap history write and
+  `createSyntheticConsoleBitmap` are gone.
+- **P5 — UI polish.** `BackHandler` → tab 0; `enableEdgeToEdge` transparent bars +
+  `statusBarsPadding()` per screen (no more `WindowInsets(0,0,0,0)` / hardcoded spacers);
+  real `Type.kt` typography; nav-bar contrast fixed (`onPrimaryContainer`); debounced
+  Compendium search + empty state + keyed lazy lists everywhere; permission flow no longer
+  auto-launches, has an "Open Settings" path on permanent denial and re-checks on
+  `ON_RESUME`; Xbox preset bar gated behind `BuildConfig.DEBUG`; dead
+  `isAutoScanEnabled` / `torch` / `zoom` VM members deleted. `fallbackToDestructiveMigration`
+  kept with a `// TODO real migrations before release`.
+- **P6 — Review / hardening.** Static review of the full P0→HEAD diff. Fixed two `NewApi`
+  lint errors that were latent crashes/no-ops on minSdk-24 devices: `Bitmap.Config.HARDWARE`
+  (guarded with an SDK check) and `android:windowLightNavigationBar` in `themes.xml`
+  (removed — redundant with the runtime `enableEdgeToEdge` call). Added `match()` OCR-noise
+  unit tests. Emulator smoke test skipped — no emulator package or system image installed
+  and pulling one is a multi-GB download (see next steps).
 
 ### Distribution
 - Kenny is installing Android Studio (macOS, `brew install --cask android-studio`, done) +
@@ -156,13 +142,69 @@ $ANDROID_HOME/platform-tools/adb install -r app/build/outputs/apk/debug/app-debu
 Toolchain: AGP 9.1.1, Gradle 9.3.1, Kotlin 2.2.10, JBR Java 25 (local) / Temurin 21 (CI),
 compileSdk/targetSdk 36, minSdk 24. There is **no** system JDK — use the Android Studio JBR.
 
+## How to test on the Pixel 10 Pro
+
+1. **Android Studio → Run.** Open the project, plug the Pixel in over USB (USB debugging
+   on), pick it as the target, hit Run. The committed `debug.keystore` means reinstalls
+   don't need an uninstall.
+2. **Or sideload the CI artifact.** GitHub → Actions → latest "Build Debug APK" run →
+   download `isaac-scanner-debug` → unzip → `adb install -r app-debug.apk`.
+3. **What to actually check on-device** (none of this is covered by unit tests or an
+   emulator — the camera + ML Kit + Gemini paths are all real-hardware-only):
+   - Cold launch → scanner tab renders, no ANR, catalog-backed Compendium fills.
+   - Grant camera → viewfinder preview is live, reticle centered, pinch-zoom + tap-focus
+     + "TV mode" all respond.
+   - Point at a real Isaac pedestal on the TV, line the **item-name banner** up inside the
+     box, tap scan → OCR should resolve the name offline in ~1 s. Try 10–15 different items.
+   - Deny camera permanently → "Open Settings" button; re-grant → viewfinder returns on
+     resume without a restart.
+   - Add items to a run, force-stop the app, relaunch → "Resume run?" banner shows the
+     right count.
+
+### Gemini key (optional — the app is fully functional offline without it)
+
+- Free key: <https://aistudio.google.com/apikey>. A **Google AI Ultra / "Gemini" consumer
+  subscription does NOT include API access** — it's a separate, free API key.
+- Local: put `GEMINI_API_KEY=...` in a `.env` at the repo root (the secrets-gradle-plugin
+  bakes it into `BuildConfig`). CI: add a `GEMINI_API_KEY` repo secret (Settings → Secrets
+  and variables → Actions). With no key, `BuildConfig.GEMINI_API_KEY == "NONE"`, every AI
+  affordance is hidden, and the offline OCR path is the whole app.
+
 ## Handoff to Codex
 
-If picking this up cold: the P0 build work is committed and CI is green (verify: Actions
-tab). Start from **TODO → the rebuild**, in order. The item dataset in
-`app/src/main/assets/isaac_items.json` is the foundation — confirm it exists and is
-complete (`python3 -m json.tool`, count `collectibles`) before wiring the data layer.
-Keep changes compiling at each step (`./gradlew :app:assembleDebug`); push to `main` in
-small commits so CI stays a useful signal. Namespace is still `com.example` — a rename to
-`com.kmill26.isaacscanner` is optional polish, do it last if at all (touches ~25 files +
-tests + manifest).
+The rebuild (P1–P6) is **done and merged**; `main` builds, tests, and lints clean. This is
+a real offline scanner now, not a demo. What's solid vs. what still needs work:
+
+**Solid / trust it:**
+- Data layer + name matching (`NameMatcher`, `IsaacItemDatabase`) — unit-tested against the
+  full 721-item catalog with noisy inputs.
+- `ScanEngine` decision flow — unit-tested with injected fakes (`ScanEngineTest`).
+- No path anywhere shows a fake/random item; every failure has a specific message.
+- Gemini service structure (schema, retries, typed errors) — code-reviewed, not yet run
+  against the live API from this checkout (no key).
+
+**Rough / unverified — needs a real Pixel:**
+- **Nothing camera-side has run on hardware.** `imageProxyToBitmap`, the `UseCaseGroup` +
+  `ViewPort` bind, rotation handling, `cropToReticle` alignment vs. the on-screen reticle,
+  ML Kit accuracy on emissive-screen glare — all untested. This is the #1 risk area.
+- **OCR hit rate on actual TV photos is unknown.** The 0.82 match bar and the candidate-
+  building heuristic in `ScanEngine.buildCandidates` are guesses; expect to tune them once
+  you see real ML Kit output. Isaac's pickup banner font + screen moiré may need a
+  contrast/greyscale pre-pass before `InputImage.fromBitmap`.
+- **Gemini calls have never executed.** First real key + first 429 / schema-mismatch will
+  probably surface something.
+- Minor, noted not fixed: `getXboxPresets()` runs in the scanner's first composition, so
+  the catalog parse can land on the main thread at cold start (fast on a Pixel, but it
+  defeats the warm-up thread — gate it behind `BuildConfig.DEBUG` or make it lazy).
+  `CompendiumScreen` recomputes the 721-item filter on every recomposition (wrap in
+  `remember(query, filters)`). If OCR reads text but it doesn't match the catalog, the
+  engine returns `Unrecognized` and never tries Gemini vision even when a key is present —
+  revisit once you know how noisy real OCR is.
+- Room still uses `fallbackToDestructiveMigration()` — fine pre-release, must become real
+  migrations before any store build.
+
+**Exact next steps:** (1) sideload to the Pixel, run the on-device checklist above, watch
+`adb logcat`. (2) Point it at 15–20 real pedestals, record OCR hit/miss, tune `OCR_MATCH_BAR`
+and `buildCandidates`. (3) Add a Gemini key, exercise the sprite-fallback + verdict paths.
+(4) Only then consider the namespace rename `com.example` → `com.kmill26.isaacscanner`
+(optional, last — touches ~25 files + tests + manifest).

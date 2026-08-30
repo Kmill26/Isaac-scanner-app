@@ -60,6 +60,33 @@ class CatalogTest {
     }
 
     @Test
+    fun `match survives realistic OCR noise on the item banner`() {
+        // All-caps banner text (Isaac renders pickup names in caps).
+        assertEquals("Brimstone", IsaacItemDatabase.match("BRIMSTONE")?.item?.name)
+        // Single-character OCR substitution (O read as Q).
+        assertEquals("Brimstone", IsaacItemDatabase.match("BRIMSTQNE")?.item?.name)
+        // Leading article + stray whitespace from a two-line banner crop.
+        assertEquals("Brimstone", IsaacItemDatabase.match("  the   Brimstone ")?.item?.name)
+        // Caps + a trailing garbage token still lands on Sacred Heart.
+        assertEquals("Sacred Heart", IsaacItemDatabase.findItemByName("SACRED HEART L")?.name)
+        // A short article-prefixed active resolves.
+        assertEquals("The D6", IsaacItemDatabase.findItemByName("the d6")?.name)
+        // Pure gibberish must not resolve to anything.
+        assertNull(IsaacItemDatabase.match("xqzptlk vvv"))
+    }
+
+    @Test
+    fun `match scores exact above fuzzy`() {
+        val exact = IsaacItemDatabase.match("Ipecac")
+        val fuzzy = IsaacItemDatabase.match("ipeccac")
+        assertNotNull(exact)
+        assertNotNull(fuzzy)
+        assertTrue(exact!!.exact)
+        assertTrue(!fuzzy!!.exact)
+        assertTrue(exact.score >= fuzzy.score)
+    }
+
+    @Test
     fun `transformations derive counts from catalog data`() {
         val guppyItems: List<IsaacItem> = IsaacItemDatabase.items
             .filter { it.transformations.contains("Guppy") }
