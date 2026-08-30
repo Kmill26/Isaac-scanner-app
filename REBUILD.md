@@ -8,10 +8,15 @@ sprite-only identification.
 
 Owner: Kenny (GitHub `Kmill26`). Repo: `Kmill26/Isaac-scanner-app`, branch `main`.
 
-**Status (P6 complete):** rebuild fully implemented and merged. `main` passes
-`:app:assembleDebug`, `:app:testDebugUnitTest` (17), and `:app:lintDebug` (0 errors).
-Never run on a physical device or emulator — camera / OCR / Gemini paths are code-reviewed
-only. See "Handoff to Codex" at the bottom for what's solid vs. what needs a real Pixel.
+**Status:** rebuild fully implemented and merged. `main` passes `:app:assembleDebug`,
+`:app:testDebugUnitTest` (17), `:app:lintDebug` (0 errors), and **CI is green**.
+
+**Emulator smoke test (API 36, Pixel 7 AVD) — PASSED:** cold launch, all four tabs render,
+721-item catalog loads, camera binds + captures + crops, **ML Kit OCR runs on-device end to
+end**, a no-item frame produces the honest "couldn't read it" banner + Rescan (never a fake
+result), Compendium search + tier/pool filters + detail sheet all work. Zero crashes across
+extensive navigation. What the emulator can't tell us: real OCR hit-rate on photos of an
+actual TV, and the Gemini paths (no key in this checkout). See "Handoff" at the bottom.
 
 ---
 
@@ -113,8 +118,13 @@ state also passes `:app:lintDebug` with 0 errors. 17 unit tests (`CatalogTest`,
   lint errors that were latent crashes/no-ops on minSdk-24 devices: `Bitmap.Config.HARDWARE`
   (guarded with an SDK check) and `android:windowLightNavigationBar` in `themes.xml`
   (removed — redundant with the runtime `enableEdgeToEdge` call). Added `match()` OCR-noise
-  unit tests. Emulator smoke test skipped — no emulator package or system image installed
-  and pulling one is a multi-GB download (see next steps).
+  unit tests.
+- **P7 — Emulator pass (API 36 AVD).** Installed the emulator + system image, smoke-tested
+  the real APK (see Status). Fixes from what it surfaced: memoized the Compendium filter
+  (`remember(query, filters)` — it was re-filtering 721 items every recomposition); pushed
+  the viewfinder top HUD below the status bar and the run pill below the HUD so the
+  zoom/EV buttons aren't covered. Audited catalog `quality` — it's an exact match to the
+  game's `items_metadata.xml`, so left as-is (details under Handoff).
 
 ### Distribution
 - Kenny is installing Android Studio (macOS, `brew install --cask android-studio`, done) +
@@ -183,25 +193,34 @@ a real offline scanner now, not a demo. What's solid vs. what still needs work:
 - Gemini service structure (schema, retries, typed errors) — code-reviewed, not yet run
   against the live API from this checkout (no key).
 
+**Verified on the emulator (see Status above):** the CameraX bind + `UseCaseGroup`/`ViewPort`
+path, `imageProxyToBitmap`, `cropToReticle`, ML Kit OCR invocation, the full
+`ScanEngine.identify` decision flow, and every screen render — all run without crashing.
+
 **Rough / unverified — needs a real Pixel:**
-- **Nothing camera-side has run on hardware.** `imageProxyToBitmap`, the `UseCaseGroup` +
-  `ViewPort` bind, rotation handling, `cropToReticle` alignment vs. the on-screen reticle,
-  ML Kit accuracy on emissive-screen glare — all untested. This is the #1 risk area.
-- **OCR hit rate on actual TV photos is unknown.** The 0.82 match bar and the candidate-
-  building heuristic in `ScanEngine.buildCandidates` are guesses; expect to tune them once
-  you see real ML Kit output. Isaac's pickup banner font + screen moiré may need a
-  contrast/greyscale pre-pass before `InputImage.fromBitmap`.
-- **Gemini calls have never executed.** First real key + first 429 / schema-mismatch will
-  probably surface something.
-- Minor, noted not fixed: `getXboxPresets()` runs in the scanner's first composition, so
-  the catalog parse can land on the main thread at cold start (fast on a Pixel, but it
-  defeats the warm-up thread — gate it behind `BuildConfig.DEBUG` or make it lazy).
-  `CompendiumScreen` recomputes the 721-item filter on every recomposition (wrap in
-  `remember(query, filters)`). If OCR reads text but it doesn't match the catalog, the
-  engine returns `Unrecognized` and never tries Gemini vision even when a key is present —
-  revisit once you know how noisy real OCR is.
+- **OCR hit rate on actual photos of a TV is unknown.** The 0.82 match bar and the
+  candidate-building heuristic in `ScanEngine.buildCandidates` are guesses; tune them once
+  you see real ML Kit output on Isaac's pickup-banner font over screen glare/moiré. A
+  greyscale/contrast pre-pass before `InputImage.fromBitmap` may help a lot.
+- **`cropToReticle` alignment vs. the on-screen reticle** looked right on the emulator's
+  virtual scene but needs a real "does the box crop what I aimed at" check.
+- **Gemini calls have never executed** — no key in this checkout. First real key + first
+  429 / schema-mismatch will probably surface something.
+- If OCR reads text but it doesn't match the catalog, the engine returns `Unrecognized` and
+  never tries Gemini vision even when a key is present — revisit once you know how noisy
+  real OCR is.
+- Debug-only clutter: the `BuildConfig.DEBUG` "Xbox preset" bar overlaps the run pill on
+  the scanner screen; `getXboxPresets()` runs in the scanner's first composition (fast on a
+  Pixel, but it can land the catalog parse on the main thread — make it lazy/deferred).
 - Room still uses `fallbackToDestructiveMigration()` — fine pre-release, must become real
   migrations before any store build.
+- Catalog `quality` (item tier) was audited against `items_metadata.xml` (the game resource,
+  via `2o181o28/eden-seed-finder`, 2025-06 "Repentance V2.1") and matches it **exactly on all
+  721**. It reflects Repentance-launch values; ~20-25% differ from the *current* Repentance+
+  Fandom wiki, almost always by 1 and usually lower (Repentance+ rebalanced many mediocre
+  items down). To adopt current values, drop your install's
+  `resources-dlc3/items_metadata.xml` in and re-map the `quality` field — the wiki scrape is
+  the only other machine-readable source and it's noisier. Not worth doing blind.
 
 **Exact next steps:** (1) sideload to the Pixel, run the on-device checklist above, watch
 `adb logcat`. (2) Point it at 15–20 real pedestals, record OCR hit/miss, tune `OCR_MATCH_BAR`
