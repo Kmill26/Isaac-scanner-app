@@ -82,7 +82,14 @@ fun CompendiumScreen(
     uiState: ScannerUiState,
     modifier: Modifier = Modifier
 ) {
-    val items = viewModel.getFilteredCompendiumItems()
+    // Re-filter the 721-item catalog only when a filter actually changes, not on
+    // every recomposition (scroll, sheet animation, etc.).
+    val items = remember(
+        uiState.compendiumQuery,
+        uiState.compendiumQualityFilter,
+        uiState.compendiumPoolFilter,
+        uiState.compendiumTransformationFilter,
+    ) { viewModel.getFilteredCompendiumItems() }
     var selectedItemForDetail by remember { mutableStateOf<IsaacItem?>(null) }
     val sheetState = rememberModalBottomSheetState()
 
