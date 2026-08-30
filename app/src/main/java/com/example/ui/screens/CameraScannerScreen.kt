@@ -1,9 +1,18 @@
 package com.example.ui.screens
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.BuildConfig
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -25,6 +34,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -45,7 +55,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Divider
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -105,25 +114,35 @@ fun CameraScannerScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var hasCameraPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED
-        )
-    }
+    val activity = context as? Activity
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    fun cameraGranted() = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.CAMERA
+    ) == PackageManager.PERMISSION_GRANTED
+
+    var hasCameraPermission by remember { mutableStateOf(cameraGranted()) }
+    var permanentlyDenied by remember { mutableStateOf(false) }
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         hasCameraPermission = isGranted
+        permanentlyDenied = !isGranted && activity != null &&
+            !activity.shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)
     }
 
-    LaunchedEffect(Unit) {
-        if (!hasCameraPermission) {
-            launcher.launch(Manifest.permission.CAMERA)
+    // Re-check on resume so a grant made in Settings is picked up without a restart.
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && cameraGranted()) {
+                hasCameraPermission = true
+                permanentlyDenied = false
+            }
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     val presets = remember { IsaacItemDatabase.getXboxPresets() }
@@ -134,7 +153,6 @@ fun CameraScannerScreen(
             // Live Camera Viewfinder with TV reticle and AI controls
             CameraViewfinder(
                 isScanning = uiState.isScanning,
-                isAutoScanEnabled = uiState.isAutoScanEnabled,
                 onCaptureFrame = { bitmap ->
                     viewModel.scanBitmap(bitmap)
                 },
@@ -145,18 +163,28 @@ fun CameraScannerScreen(
         } else {
             // Permission Placeholder & Preset Scanner fallback
             CameraPermissionFallback(
+                permanentlyDenied = permanentlyDenied,
                 onRequestPermission = { launcher.launch(Manifest.permission.CAMERA) },
+                onOpenSettings = {
+                    val intent = Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.fromParts("package", context.packageName, null)
+                    )
+                    context.startActivity(intent)
+                },
                 onSelectPreset = { preset ->
                     viewModel.scanXboxPreset(preset)
                 }
             )
         }
 
-        // Top Xbox Console Presets Bar (Quick switch/test for TV screens)
+        // Top Xbox Console Presets Bar — debug-only scaffolding for testing without a real TV.
+        if (BuildConfig.DEBUG) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = if (hasCameraPermission) 72.dp else 16.dp, start = 16.dp, end = 16.dp)
+                .statusBarsPadding()
+                .padding(top = if (hasCameraPermission) 64.dp else 8.dp, start = 16.dp, end = 16.dp)
         ) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -205,7 +233,7 @@ fun CameraScannerScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             contentPadding = PaddingValues(bottom = 4.dp)
                         ) {
-                            items(presets) { preset ->
+                            items(presets, key = { it.title }) { preset ->
                                 XboxPresetChip(
                                     preset = preset,
                                     onClick = { viewModel.scanXboxPreset(preset) }
@@ -216,12 +244,14 @@ fun CameraScannerScreen(
                 }
             }
         }
+        }
 
         // Active Run Quick Summary Pill (Floating on top right)
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = 16.dp, end = 16.dp)
+                .statusBarsPadding()
+                .padding(top = 12.dp, end = 16.dp)
         ) {
             Surface(
                 onClick = onNavigateToRun,
@@ -349,8 +379,7 @@ private fun ScanErrorBanner(
                     .fillMaxWidth()
                     .testTag("rescan_button"),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = IsaacPrimaryCrimson,
-                    contentColor = IsaacPrimaryContainer
+                    containerColor = IsaacPrimaryCrimson
                 ),
                 shape = RoundedCornerShape(12.dp)
             ) {
@@ -675,15 +704,13 @@ private fun ScanResultCard(
                         .weight(1.5f)
                         .testTag("add_item_to_run_button"),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = IsaacPrimaryCrimson,
-                        contentColor = IsaacPrimaryContainer
+                        containerColor = IsaacPrimaryCrimson
                     ),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = "Add to Run",
-                        tint = IsaacPrimaryContainer,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
@@ -734,13 +761,16 @@ private fun XboxPresetChip(
 
 @Composable
 private fun CameraPermissionFallback(
+    permanentlyDenied: Boolean,
     onRequestPermission: () -> Unit,
+    onOpenSettings: () -> Unit,
     onSelectPreset: (XboxPresetScreen) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
         modifier = modifier
             .fillMaxSize()
+            .statusBarsPadding()
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -773,7 +803,11 @@ private fun CameraPermissionFallback(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Point your phone camera directly at your Xbox TV screen or monitor to automatically identify pedestal items and calculate real-time synergies.",
+            text = if (permanentlyDenied) {
+                "Camera access is turned off for this app. Enable it in Settings, then return here."
+            } else {
+                "Point your phone camera directly at your Xbox TV screen or monitor to automatically identify pedestal items and calculate real-time synergies."
+            },
             color = IsaacOnSurfaceVariant,
             fontSize = 13.sp,
             lineHeight = 18.sp,
@@ -783,15 +817,17 @@ private fun CameraPermissionFallback(
         Spacer(modifier = Modifier.height(20.dp))
 
         Button(
-            onClick = onRequestPermission,
+            onClick = { if (permanentlyDenied) onOpenSettings() else onRequestPermission() },
             colors = ButtonDefaults.buttonColors(
-                containerColor = IsaacPrimaryCrimson,
-                contentColor = IsaacPrimaryContainer
+                containerColor = IsaacPrimaryCrimson
             ),
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.testTag("request_camera_permission_button")
         ) {
-            Text("Enable Camera Scanner", fontWeight = FontWeight.Bold)
+            Text(
+                text = if (permanentlyDenied) "Open Settings" else "Enable Camera Scanner",
+                fontWeight = FontWeight.Bold
+            )
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -809,7 +845,7 @@ private fun CameraPermissionFallback(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(IsaacItemDatabase.getXboxPresets().take(4)) { preset ->
+            items(IsaacItemDatabase.getXboxPresets().take(4), key = { it.title }) { preset ->
                 Card(
                     onClick = { onSelectPreset(preset) },
                     colors = CardDefaults.cardColors(containerColor = IsaacSurfaceElevated),

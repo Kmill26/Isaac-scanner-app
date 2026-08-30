@@ -29,9 +29,6 @@ import kotlinx.coroutines.launch
 
 data class ScannerUiState(
     val isScanning: Boolean = false,
-    val isAutoScanEnabled: Boolean = false,
-    val torchEnabled: Boolean = false,
-    val zoomLevel: Float = 1.0f,
     val latestScanResult: ScanDetectionResult? = null,
     val scanErrorMessage: String? = null,
     /** True while an on-demand Gemini "should I take this?" verdict is being fetched. */
@@ -47,9 +44,7 @@ data class ScannerUiState(
     val compendiumQuery: String = "",
     val compendiumQualityFilter: Int? = null,
     val compendiumPoolFilter: String? = null,
-    val compendiumTransformationFilter: String? = null,
-    val selectedDetailItem: IsaacItem? = null,
-    val testCandidateItem: IsaacItem? = null
+    val compendiumTransformationFilter: String? = null
 )
 
 class ScannerViewModel(application: Application) : AndroidViewModel(application) {
@@ -133,10 +128,6 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { runStore.save(ids) }
     }
 
-    fun setTorchEnabled(enabled: Boolean) {
-        _uiState.value = _uiState.value.copy(torchEnabled = enabled)
-    }
-
     /** Surface a camera-capture failure (raised from the viewfinder before a scan starts). */
     fun reportScanError(message: String) {
         _uiState.value = _uiState.value.copy(isScanning = false, scanErrorMessage = message)
@@ -147,15 +138,6 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
 
     fun dismissScanError() {
         _uiState.value = _uiState.value.copy(scanErrorMessage = null)
-    }
-
-    fun setZoomLevel(zoom: Float) {
-        _uiState.value = _uiState.value.copy(zoomLevel = zoom.coerceIn(1.0f, 5.0f))
-    }
-
-    fun toggleAutoScan() {
-        val newAutoState = !_uiState.value.isAutoScanEnabled
-        _uiState.value = _uiState.value.copy(isAutoScanEnabled = newAutoState)
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -387,14 +369,6 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
 
         (activeRunSynergies as MutableStateFlow).value = allSynergies
         (activeTransformations as MutableStateFlow).value = IsaacItemDatabase.calculateTransformations(current)
-    }
-
-    fun selectDetailItem(item: IsaacItem?) {
-        _uiState.value = _uiState.value.copy(selectedDetailItem = item)
-    }
-
-    fun setTestCandidateItem(item: IsaacItem?) {
-        _uiState.value = _uiState.value.copy(testCandidateItem = item)
     }
 
     fun updateCompendiumFilters(

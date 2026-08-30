@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -111,9 +112,10 @@ fun CurrentRunScreen(
         modifier = modifier
             .fillMaxSize()
             .background(IsaacBackground)
+            .statusBarsPadding()
             .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 20.dp, bottom = 100.dp)
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 12.dp, bottom = 100.dp)
     ) {
         // Header Row: Title, Run Actions
         item {
@@ -204,8 +206,7 @@ fun CurrentRunScreen(
                                 onClick = { viewModel.resumePersistedRun() },
                                 modifier = Modifier.weight(1f).testTag("resume_run_button"),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = IsaacPrimaryCrimson,
-                                    contentColor = IsaacPrimaryContainer
+                                    containerColor = IsaacPrimaryCrimson
                                 ),
                                 shape = RoundedCornerShape(10.dp)
                             ) {
@@ -264,7 +265,7 @@ fun CurrentRunScreen(
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            items(uiState.currentRunItems) { item ->
+                            items(uiState.currentRunItems, key = { it.id }) { item ->
                                 RunItemChip(
                                     item = item,
                                     onRemove = { viewModel.removeItemFromRun(item) }
@@ -360,7 +361,7 @@ fun CurrentRunScreen(
 
                         Spacer(modifier = Modifier.height(8.dp))
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            items(candidates) { cand ->
+                            items(candidates, key = { it.id }) { cand ->
                                 Surface(
                                     onClick = {
                                         selectedCandidateToTest = cand
@@ -460,8 +461,7 @@ fun CurrentRunScreen(
                                     },
                                     modifier = Modifier.fillMaxWidth(),
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = IsaacPrimaryCrimson,
-                                        contentColor = IsaacPrimaryContainer
+                                        containerColor = IsaacPrimaryCrimson
                                     ),
                                     shape = RoundedCornerShape(10.dp)
                                 ) {
@@ -507,7 +507,7 @@ fun CurrentRunScreen(
                 }
             }
         } else {
-            items(activeSynergies) { synergy ->
+            items(activeSynergies, key = { it.itemA + "+" + it.itemB }) { synergy ->
                 SynergyCard(synergy = synergy)
             }
         }
@@ -532,7 +532,7 @@ fun CurrentRunScreen(
                         fontSize = 12.sp
                     )
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(characters) { char ->
+                        items(characters, key = { it }) { char ->
                             Surface(
                                 onClick = { characterInput = char },
                                 shape = RoundedCornerShape(8.dp),
@@ -591,8 +591,7 @@ fun CurrentRunScreen(
                         showSaveDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = IsaacPrimaryCrimson,
-                        contentColor = IsaacPrimaryContainer
+                        containerColor = IsaacPrimaryCrimson
                     )
                 ) {
                     Text("Save to History", fontWeight = FontWeight.Bold)
@@ -631,13 +630,13 @@ private fun RunItemChip(
                 ItemQualityBadge(quality = item.quality, showStars = false)
                 IconButton(
                     onClick = onRemove,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(36.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "Remove",
+                        contentDescription = "Remove ${item.name} from run",
                         tint = IsaacOnSurfaceVariant,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                 }
             }
@@ -656,7 +655,7 @@ private fun RunItemChip(
             Text(
                 text = item.quote,
                 color = IsaacOnSurfaceVariant,
-                fontSize = 10.sp,
+                fontSize = 12.sp,
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )

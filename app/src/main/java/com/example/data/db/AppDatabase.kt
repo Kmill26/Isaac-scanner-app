@@ -24,6 +24,8 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "isaac_scanner_db"
+                    // TODO real migrations before any real release — destructive fallback is
+                    //  only acceptable while the schema is still pre-release.
                 ).fallbackToDestructiveMigration().build()
                 INSTANCE = instance
                 instance

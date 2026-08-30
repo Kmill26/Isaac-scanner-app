@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -42,6 +43,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -84,17 +86,26 @@ fun CompendiumScreen(
     var selectedItemForDetail by remember { mutableStateOf<IsaacItem?>(null) }
     val sheetState = rememberModalBottomSheetState()
 
+    // Debounced search: type into local state, push to the ViewModel after a pause.
+    var queryInput by remember { mutableStateOf(uiState.compendiumQuery) }
+    LaunchedEffect(queryInput) {
+        kotlinx.coroutines.delay(250)
+        if (queryInput != uiState.compendiumQuery) {
+            viewModel.updateCompendiumFilters(query = queryInput)
+        }
+    }
+
     val qualityFilters = listOf(null, 4, 3, 2, 1, 0)
     val poolFilters = listOf(null, "Treasure", "Devil", "Angel", "Secret", "Shop", "Boss")
-    val transFilters = listOf(null, "Guppy", "Seraphim", "Conjoined", "Fun Guy", "Spun")
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(IsaacBackground)
+            .statusBarsPadding()
             .padding(horizontal = 16.dp)
     ) {
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // Title Row
         Text(
@@ -113,8 +124,8 @@ fun CompendiumScreen(
 
         // Search Bar
         OutlinedTextField(
-            value = uiState.compendiumQuery,
-            onValueChange = { viewModel.updateCompendiumFilters(query = it) },
+            value = queryInput,
+            onValueChange = { queryInput = it },
             placeholder = { Text("Search by item name, quote, or effect...", color = IsaacOnSurfaceVariant, fontSize = 13.sp) },
             leadingIcon = {
                 Icon(
@@ -124,8 +135,11 @@ fun CompendiumScreen(
                 )
             },
             trailingIcon = {
-                if (uiState.compendiumQuery.isNotEmpty()) {
-                    IconButton(onClick = { viewModel.updateCompendiumFilters(query = "") }) {
+                if (queryInput.isNotEmpty()) {
+                    IconButton(onClick = {
+                        queryInput = ""
+                        viewModel.updateCompendiumFilters(query = "")
+                    }) {
                         Icon(imageVector = Icons.Default.Close, contentDescription = "Clear", tint = IsaacOnSurfaceVariant)
                     }
                 }
@@ -147,7 +161,7 @@ fun CompendiumScreen(
 
         // Quality Filter Chips
         LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(qualityFilters) { q ->
+            items(qualityFilters, key = { it?.toString() ?: "all" }) { q ->
                 val selected = uiState.compendiumQualityFilter == q
                 Surface(
                     onClick = { viewModel.updateCompendiumFilters(quality = q) },
@@ -170,7 +184,7 @@ fun CompendiumScreen(
 
         // Pool Filter Chips
         LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(poolFilters) { pool ->
+            items(poolFilters, key = { it ?: "all" }) { pool ->
                 val selected = uiState.compendiumPoolFilter == pool
                 Surface(
                     onClick = { viewModel.updateCompendiumFilters(pool = pool) },
@@ -197,13 +211,31 @@ fun CompendiumScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(bottom = 100.dp)
         ) {
-            items(items) { item ->
-                CompendiumItemCard(
-                    item = item,
-                    isInRun = uiState.currentRunItems.any { it.id == item.id },
-                    onClick = { selectedItemForDetail = item },
-                    onAddToRun = { viewModel.addItemToRun(item) }
-                )
+            if (items.isEmpty()) {
+                item(key = "empty", contentType = "empty") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 48.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No items match these filters. Clear the search or filter chips to see the full compendium.",
+                            color = IsaacOnSurfaceVariant,
+                            fontSize = 13.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                }
+            } else {
+                items(items, key = { it.id }, contentType = { "item" }) { item ->
+                    CompendiumItemCard(
+                        item = item,
+                        isInRun = uiState.currentRunItems.any { it.id == item.id },
+                        onClick = { selectedItemForDetail = item },
+                        onAddToRun = { viewModel.addItemToRun(item) }
+                    )
+                }
             }
         }
     }
@@ -293,7 +325,7 @@ private fun CompendiumItemCard(
                     Text(
                         text = "${item.itemPools.joinToString(", ")} • ${item.itemType.label}",
                         color = IsaacOnSurfaceVariant,
-                        fontSize = 10.sp
+                        fontSize = 12.sp
                     )
                 }
             }
@@ -325,7 +357,7 @@ private fun CompendiumItemCard(
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = "Add to Run",
-                        tint = IsaacPrimaryContainer,
+                        tint = Color.White,
                         modifier = Modifier.size(18.dp)
                     )
                 }
@@ -463,7 +495,7 @@ private fun ItemDetailSheetContent(
                     .height(180.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                items(item.synergies) { syn ->
+                items(item.synergies, key = { it.partnerItemName }) { syn ->
                     ItemSynergyDetailRow(synergy = syn)
                 }
             }
@@ -477,7 +509,7 @@ private fun ItemDetailSheetContent(
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (isInRun) IsaacSurfaceVariant else IsaacPrimaryCrimson,
-                contentColor = if (isInRun) IsaacOnSurfaceVariant else IsaacPrimaryContainer
+                contentColor = if (isInRun) IsaacOnSurfaceVariant else Color.White
             ),
             shape = RoundedCornerShape(12.dp)
         ) {

@@ -112,7 +112,6 @@ private const val CAPTURE_ERROR_MESSAGE =
 @Composable
 fun CameraViewfinder(
     isScanning: Boolean,
-    isAutoScanEnabled: Boolean,
     onCaptureFrame: (Bitmap) -> Unit,
     modifier: Modifier = Modifier,
     onCaptureError: (String) -> Unit = {}
@@ -408,9 +407,9 @@ fun CameraViewfinder(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = if (isAutoScanEnabled) "Live: Auto Tracking" else "Live: Xbox HDMI Input",
+                            text = "Live: Xbox HDMI Input",
                             color = IsaacPrimaryCrimson,
-                            fontSize = 10.sp
+                            fontSize = 12.sp
                         )
                     }
                 }

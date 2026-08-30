@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -85,9 +86,10 @@ fun RunHistoryScreen(
         modifier = modifier
             .fillMaxSize()
             .background(IsaacBackground)
+            .statusBarsPadding()
             .padding(horizontal = 16.dp)
     ) {
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -169,7 +171,7 @@ fun RunHistoryScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     contentPadding = PaddingValues(bottom = 100.dp)
                 ) {
-                    items(savedRuns) { run ->
+                    items(savedRuns, key = { it.id }) { run ->
                         SavedRunCard(
                             run = run,
                             onLoad = {
@@ -203,7 +205,7 @@ fun RunHistoryScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     contentPadding = PaddingValues(bottom = 100.dp)
                 ) {
-                    items(scanHistory) { scan ->
+                    items(scanHistory, key = { it.id }) { scan ->
                         ScanHistoryCard(scan = scan)
                     }
                 }
@@ -309,8 +311,7 @@ private fun SavedRunCard(
                 Button(
                     onClick = onLoad,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = IsaacPrimaryCrimson,
-                        contentColor = IsaacPrimaryContainer
+                        containerColor = IsaacPrimaryCrimson
                     ),
                     shape = RoundedCornerShape(10.dp)
                 ) {
@@ -381,7 +382,7 @@ private fun ScanHistoryCard(
             Text(
                 text = dateStr,
                 color = IsaacOnSurfaceVariant.copy(alpha = 0.7f),
-                fontSize = 10.sp
+                fontSize = 12.sp
             )
         }
     }

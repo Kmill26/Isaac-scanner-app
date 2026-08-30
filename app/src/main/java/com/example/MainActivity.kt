@@ -1,14 +1,15 @@
 package com.example
 
+import android.graphics.Color as AndroidColor
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -52,6 +53,7 @@ import com.example.ui.theme.IsaacAlertContainer
 import com.example.ui.theme.IsaacAlertOnContainer
 import com.example.ui.theme.IsaacBackground
 import com.example.ui.theme.IsaacBorder
+import com.example.ui.theme.IsaacOnPrimaryContainer
 import com.example.ui.theme.IsaacOnSurfaceVariant
 import com.example.ui.theme.IsaacPrimaryContainer
 import com.example.ui.theme.IsaacPrimaryCrimson
@@ -73,7 +75,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT)
+        )
         setContent {
             MyApplicationTheme {
                 IsaacAppRoot(viewModel = viewModel)
@@ -87,10 +92,12 @@ fun IsaacAppRoot(viewModel: ScannerViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedScreenIndex by rememberSaveable { mutableIntStateOf(0) }
 
+    // System back returns to the scanner instead of exiting the app.
+    BackHandler(enabled = selectedScreenIndex != 0) { selectedScreenIndex = 0 }
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = IsaacBackground,
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             NavigationBar(
                 containerColor = IsaacSurface,
@@ -100,7 +107,7 @@ fun IsaacAppRoot(viewModel: ScannerViewModel) {
                     .border(0.5.dp, IsaacBorder, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                     .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
             ) {
-                AppDestination.values().forEachIndexed { index, destination ->
+                AppDestination.entries.forEachIndexed { index, destination ->
                     val isSelected = selectedScreenIndex == index
 
                     NavigationBarItem(
@@ -135,13 +142,14 @@ fun IsaacAppRoot(viewModel: ScannerViewModel) {
                         label = {
                             Text(
                                 text = destination.title,
-                                fontSize = 11.sp,
+                                fontSize = 12.sp,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                             )
                         },
                         colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = IsaacPrimaryCrimson,
-                            selectedTextColor = IsaacPrimaryCrimson,
+                            // Light pink on the deep-maroon indicator pill — crimson-on-maroon was ~3:1.
+                            selectedIconColor = IsaacOnPrimaryContainer,
+                            selectedTextColor = IsaacOnPrimaryContainer,
                             indicatorColor = IsaacPrimaryContainer,
                             unselectedIconColor = IsaacOnSurfaceVariant,
                             unselectedTextColor = IsaacOnSurfaceVariant
