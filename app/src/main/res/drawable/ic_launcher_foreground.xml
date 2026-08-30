@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer Glow Aura -->
+    <path
+        android:pathData="M32,32 h44 v44 h-44 z"
+        android:strokeWidth="4"
+        android:strokeColor="#80FF5252" />
+    <!-- D6 Dice Body -->
+    <path
+        android:pathData="M35,35 h38 v38 h-38 z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="35"
+                android:startY="35"
+                android:endX="73"
+                android:endY="73"
+                android:type="linear">
+                <item android:color="#FF5252" android:offset="0.0" />
+                <item android:color="#B71C1C" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Dice border -->
+    <path
+        android:pathData="M35,35 h38 v38 h-38 z"
+        android:strokeWidth="2.5"
+        android:strokeColor="#FFF" />
+    <!-- Center D6 Pips (6 pips) -->
+    <path
+        android:pathData="M43,43m-2.8,0a2.8,2.8 0 1,1 5.6,0a2.8,2.8 0 1,1 -5.6,0
+                         M65,43m-2.8,0a2.8,2.8 0 1,1 5.6,0a2.8,2.8 0 1,1 -5.6,0
+                         M43,54m-2.8,0a2.8,2.8 0 1,1 5.6,0a2.8,2.8 0 1,1 -5.6,0
+                         M65,54m-2.8,0a2.8,2.8 0 1,1 5.6,0a2.8,2.8 0 1,1 -5.6,0
+                         M43,65m-2.8,0a2.8,2.8 0 1,1 5.6,0a2.8,2.8 0 1,1 -5.6,0
+                         M65,65m-2.8,0a2.8,2.8 0 1,1 5.6,0a2.8,2.8 0 1,1 -5.6,0"
+        android:fillColor="#FFF" />
+    <!-- Scanner Eye Reticle Corner Accents -->
+    <path
+        android:pathData="M24,30 L24,24 L30,24
+                         M84,30 L84,24 L78,24
+                         M24,78 L24,84 L30,84
+                         M84,78 L84,84 L78,84"
+        android:strokeWidth="3.5"
+        android:strokeColor="#FFD700"
+        android:strokeLineCap="round" />
+</vector>

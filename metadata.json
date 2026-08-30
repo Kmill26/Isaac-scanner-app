@@ -1,0 +1,6 @@
+{
+  "name": "Isaac Item Scanner",
+  "description": "AI camera scanner for The Binding of Isaac on Xbox and consoles with real-time item detection and synergy analysis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
