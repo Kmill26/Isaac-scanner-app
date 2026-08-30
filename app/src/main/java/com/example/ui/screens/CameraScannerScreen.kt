@@ -153,6 +153,7 @@ fun CameraScannerScreen(
             // Live Camera Viewfinder with TV reticle and AI controls
             CameraViewfinder(
                 isScanning = uiState.isScanning,
+                aiAvailable = uiState.aiAvailable,
                 onCaptureFrame = { bitmap ->
                     viewModel.scanBitmap(bitmap)
                 },

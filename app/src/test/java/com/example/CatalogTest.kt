@@ -17,10 +17,18 @@ import org.robolectric.annotation.Config
 class CatalogTest {
 
     @Test
-    fun `catalog loads the full bundled collectible list`() {
-        assertEquals(721, IsaacItemDatabase.items.size)
+    fun `catalog loads the full bundled collectible + trinket list`() {
+        // 721 collectibles + 188 trinkets, all resolvable by name.
+        assertEquals(909, IsaacItemDatabase.items.size)
         assertTrue(IsaacItemDatabase.items.all { it.name.isNotBlank() })
-        assertTrue(IsaacItemDatabase.items.all { it.quality in 0..4 })
+        val collectibles = IsaacItemDatabase.items.filter { it.itemType != ItemType.TRINKET }
+        assertEquals(721, collectibles.size)
+        assertTrue(collectibles.all { it.quality in 0..4 })
+        // A trinket resolves by name and carries no tier.
+        val trinket = IsaacItemDatabase.findItemByName("Swallowed Penny")
+        assertNotNull(trinket)
+        assertEquals(ItemType.TRINKET, trinket!!.itemType)
+        assertEquals(-1, trinket.quality)
     }
 
     @Test

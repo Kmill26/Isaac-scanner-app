@@ -90,20 +90,44 @@ class GeminiVisionService {
     // Entry points
     // ------------------------------------------------------------------------------------------
 
-    /** Identify the pedestal item from the sprite alone. Throws [ScanException] on any failure. */
-    suspend fun identify(bitmap: Bitmap): GeminiIdentification = withContext(Dispatchers.IO) {
+    /**
+     * Identify the item in a photo of a TV/console screen and, in the same call, give a
+     * run-aware verdict. This is the primary scan path whenever a key is configured — a
+     * vision model reads Isaac's stylised pickup-banner font and recognises sprites far more
+     * reliably than on-device OCR + fuzzy matching. Throws [ScanException] on any failure.
+     */
+    suspend fun identify(
+        bitmap: Bitmap,
+        runItems: List<String> = emptyList()
+    ): GeminiIdentification = withContext(Dispatchers.IO) {
         if (!isConfigured()) throw ScanException.NoApiKey
 
+        val inventory = if (runItems.isEmpty()) {
+            "The player has no items yet this run."
+        } else {
+            "The player's current run items: ${runItems.joinToString(", ")}."
+        }
+
         val prompt = """
-            You are an expert on The Binding of Isaac: Repentance.
-            This photo is of a TV/console screen. Identify the single most prominent Isaac
-            collectible shown (on a pedestal, shop slot, devil/angel reward, or item pickup banner).
-            Respond with JSON only, matching the provided schema.
-            - itemName: the exact official English item name (e.g. "Brimstone", "Sacred Heart", "The D6").
-            - itemDetected: false if you cannot see an Isaac item at all.
-            - confidence: 0..1, your certainty in itemName.
-            - verdict: one or two sentences on the item's immediate impact.
-            - antiSynergy: true only if this item is broadly build-ruining on its own.
+            You are an expert on The Binding of Isaac: Repentance+.
+            This is a photo taken with a phone camera pointed at a TV or monitor running the
+            game — expect glare, moire, motion blur, an off-angle, and low effective resolution.
+
+            Identify the single most prominent Isaac item shown: a collectible OR a trinket, on
+            a pedestal, in a shop, a devil/angel reward, the item pickup banner, or held in the
+            HUD. Read the item-name banner text if it is visible; otherwise recognise the sprite.
+
+            $inventory
+
+            Respond with JSON only, matching the schema:
+            - itemName: the EXACT official English name, spelled as in-game
+              (e.g. "Brimstone", "Sacred Heart", "The D6", "Wooden Spoon", "Cricket's Head").
+              No commentary, no "(collectible)" suffix.
+            - itemDetected: false only if there is genuinely no Isaac item visible.
+            - confidence: 0..1 — your honest certainty in itemName. Use < 0.4 if you are guessing.
+            - verdict: 1-2 sentences — is it worth taking right now, and the single biggest
+              synergy or anti-synergy with the current run items listed above.
+            - antiSynergy: true if taking it actively hurts the current build.
         """.trimIndent()
 
         val request = GenerateContentRequest(

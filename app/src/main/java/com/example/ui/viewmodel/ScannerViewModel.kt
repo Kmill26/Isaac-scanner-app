@@ -174,8 +174,8 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
                 is ScanOutcome.Unrecognized -> _uiState.value.copy(
                     isScanning = false,
                     latestScanResult = null,
-                    scanErrorMessage = "Read \"${outcome.rawText.take(60).trim()}\" but it's not a known " +
-                        "item — line the box up with just the item-name banner and rescan."
+                    scanErrorMessage = "Best guess: \"${outcome.rawText.take(60).trim()}\" — not in the " +
+                        "bundled database. Line the item-name banner up in the box and rescan."
                 )
 
                 is ScanOutcome.NeedCloserLook -> _uiState.value.copy(

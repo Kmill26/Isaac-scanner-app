@@ -12,7 +12,7 @@ enum class ScanSource {
     /** On-device ML Kit OCR matched against the bundled catalog. Fully offline. */
     OCR,
 
-    /** Gemini vision fallback identified the item from the sprite when OCR found no text. */
+    /** Gemini vision identified the item (primary path when an API key is configured). */
     GEMINI,
 
     /** Gemini produced an on-demand "should I take this?" verdict for an already-matched item. */
@@ -39,7 +39,7 @@ data class IsaacItem(
     val name: String,
     val quote: String,
     val description: String,
-    val quality: Int, // 0 to 4
+    val quality: Int, // 0 to 4 for collectibles; -1 for trinkets (no tier)
     val itemType: ItemType,
     val recharge: String? = null,
     val itemPools: List<String> = emptyList(),

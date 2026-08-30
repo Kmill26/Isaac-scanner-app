@@ -116,6 +116,7 @@ fun CameraViewfinder(
     isScanning: Boolean,
     onCaptureFrame: (Bitmap) -> Unit,
     modifier: Modifier = Modifier,
+    aiAvailable: Boolean = false,
     onCaptureError: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -410,7 +411,7 @@ fun CameraViewfinder(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Live: Xbox HDMI Input",
+                            text = if (aiAvailable) "AI recognition ON" else "Offline OCR mode",
                             color = IsaacPrimaryCrimson,
                             fontSize = 12.sp
                         )

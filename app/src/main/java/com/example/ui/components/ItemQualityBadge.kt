@@ -33,13 +33,16 @@ fun ItemQualityBadge(
     modifier: Modifier = Modifier,
     showStars: Boolean = true
 ) {
+    // Trinkets have no quality tier (quality < 0) — show a plain "Trinket" pill instead.
     val (tierColor, label) = when (quality) {
         4 -> Pair(QualityTier4, "Tier 4 • God Tier")
         3 -> Pair(QualityTier3, "Tier 3 • Great")
         2 -> Pair(QualityTier2, "Tier 2 • Decent")
         1 -> Pair(QualityTier1, "Tier 1 • Mediocre")
-        else -> Pair(QualityTier0, "Tier 0 • Trash")
+        0 -> Pair(QualityTier0, "Tier 0 • Trash")
+        else -> Pair(QualityTier1, "Trinket")
     }
+    val isTrinket = quality < 0
 
     Box(
         modifier = modifier
@@ -52,7 +55,7 @@ fun ItemQualityBadge(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            if (showStars) {
+            if (showStars && !isTrinket) {
                 Row(horizontalArrangement = Arrangement.spacedBy(1.dp)) {
                     val count = if (quality == 0) 1 else quality
                     repeat(count) {

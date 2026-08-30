@@ -17,6 +17,9 @@ object CatalogLoader {
 
     private const val ASSET_NAME = "isaac_items.json"
 
+    /** Trinket ids are offset so a single [IsaacItem] list can hold both without id collisions. */
+    const val TRINKET_ID_OFFSET = 100_000
+
     data class Catalog(
         val items: List<IsaacItem>,
         val version: String
@@ -30,9 +33,30 @@ object CatalogLoader {
             .use { it.readText() }
         val dto = adapter.fromJson(json) ?: error("Could not parse $ASSET_NAME")
 
-        val items = dto.collectibles.map { it.toIsaacItem(CuratedSynergies.byName[it.name.trim().lowercase()]) }
-        return Catalog(items = items, version = dto.version)
+        val collectibles = dto.collectibles.map {
+            it.toIsaacItem(CuratedSynergies.byName[it.name.trim().lowercase()])
+        }
+        // Trinkets reuse the same model so OCR / AI can resolve them and the compendium lists
+        // them. They carry no tier (quality = -1), pools, recharge or transformation data.
+        val trinkets = dto.trinkets.map { it.toIsaacItem() }
+        return Catalog(items = collectibles + trinkets, version = dto.version)
     }
+
+    private fun TrinketDto.toIsaacItem(): IsaacItem = IsaacItem(
+        id = TRINKET_ID_OFFSET + id,
+        name = name,
+        quote = quote?.trim().orEmpty(),
+        description = description,
+        quality = -1,
+        itemType = ItemType.TRINKET,
+        recharge = null,
+        itemPools = emptyList(),
+        transformations = emptyList(),
+        stats = emptyMap(),
+        iconEmoji = "🪬",
+        synergies = emptyList(),
+        dlc = "Repentance"
+    )
 
     private fun CollectibleDto.toIsaacItem(curated: List<SynergyInfo>?): IsaacItem {
         val resolvedType = when (type.trim().lowercase()) {

@@ -11,16 +11,23 @@ import com.example.data.model.SynergyRating
 import com.example.data.ocr.ItemTextRecognizer
 
 /**
- * The core scan pipeline: **OCR first, fully offline**, Gemini only as a last resort.
+ * The core scan pipeline.
+ *
+ * **When a Gemini key is configured, AI vision is the primary path** — reading Isaac's
+ * stylised pickup-banner font and recognising sprites in a phone photo of a TV is exactly
+ * what a vision model handles well and what on-device OCR + fuzzy matching handles badly.
+ * OCR still runs first (fast, free), but its result is only trusted outright on a
+ * near-certain exact hit; otherwise Gemini decides, with OCR as the fallback if Gemini errors.
+ *
+ * **With no key it's OCR-only** (offline, private) with honest "couldn't read it" outcomes.
  *
  * Decision flow for [identify]:
- *  1. OCR the (already reticle-cropped) bitmap.
- *  2. Build candidate strings — each ranked line, adjacent-line joins (names wrap on the banner),
- *     and the whole joined blob — and run every candidate through [IsaacItemDatabase.match].
- *  3. Best match clears [OCR_MATCH_BAR]  → [ScanOutcome.Identified] (source OCR, verdict null).
- *  4. Readable text but no catalog match  → [ScanOutcome.Unrecognized].
- *  5. No usable text + Gemini configured  → Gemini vision fallback (→ Identified / Unrecognized / Failed).
- *  6. No usable text + no key             → [ScanOutcome.NeedCloserLook].
+ *  1. OCR the (already reticle-cropped) bitmap; compute the best catalog match across candidates.
+ *  2. Near-certain exact OCR hit ([STRONG_OCR_BAR]) → Identified, offline, no API call.
+ *  3. Else if a key is configured → Gemini vision (identify + run-aware verdict in one call).
+ *     Success → Identified. Failure → fall back to any decent OCR match, else the error / text.
+ *  4. Else (no key): OCR match at [OCR_MATCH_BAR] → Identified; readable-but-unmatched text →
+ *     Unrecognized; nothing → NeedCloserLook.
  *
  * [ocr] and [gemini] are injectable so this is unit-testable without ML Kit or the network.
  */
@@ -31,47 +38,49 @@ class ScanEngine(
 
     suspend fun identify(bitmap: Bitmap, currentRunItemNames: List<String>): ScanOutcome {
         val text = runCatching { ocr(bitmap) }.getOrDefault(OcrText.EMPTY)
+        val ocrMatch = bestOcrMatch(text)
+        val rawText = text.fullText.ifBlank { text.lines.joinToString(" ") }
 
-        bestOcrMatch(text)?.let { (item, score) ->
-            if (score >= OCR_MATCH_BAR) {
-                return identified(
-                    item = item,
-                    confidence = score,
-                    source = ScanSource.OCR,
-                    verdict = null,
-                    runNames = currentRunItemNames,
-                    rawText = text.fullText.ifBlank { text.lines.joinToString(" ") },
-                    geminiAntiSynergy = false
-                )
+        fun ocrIdentified(m: Pair<IsaacItem, Float>) = identified(
+            item = m.first, confidence = m.second, source = ScanSource.OCR,
+            verdict = null, runNames = currentRunItemNames, rawText = rawText,
+            geminiAntiSynergy = false
+        )
+
+        // A near-certain exact OCR hit is trustworthy and free — take it, no API call.
+        ocrMatch?.takeIf { it.second >= STRONG_OCR_BAR }?.let { return ocrIdentified(it) }
+
+        if (gemini.isConfigured()) {
+            return try {
+                val id = gemini.identify(bitmap, currentRunItemNames)
+                val item = IsaacItemDatabase.findItemByName(id.itemName)
+                if (item != null) {
+                    identified(
+                        item = item,
+                        confidence = id.confidence,
+                        source = ScanSource.GEMINI,
+                        verdict = id.verdict.ifBlank { null },
+                        runNames = currentRunItemNames,
+                        rawText = null,
+                        geminiAntiSynergy = id.antiSynergy
+                    )
+                } else {
+                    // AI named something not in the bundled catalog — still worth showing.
+                    ScanOutcome.Unrecognized(id.itemName)
+                }
+            } catch (e: ScanException) {
+                // AI unavailable (rate limit / network / bad response) — fall back to OCR.
+                ocrMatch?.takeIf { it.second >= OCR_MATCH_BAR }?.let { return ocrIdentified(it) }
+                if (text.hasText) ScanOutcome.Unrecognized(rawText) else ScanOutcome.Failed(e)
             }
         }
 
-        if (text.hasText) {
-            return ScanOutcome.Unrecognized(text.fullText.ifBlank { text.lines.joinToString(" ") })
-        }
-
-        if (!gemini.isConfigured()) {
-            return ScanOutcome.NeedCloserLook(NEED_CLOSER_MESSAGE)
-        }
-
-        return try {
-            val id = gemini.identify(bitmap)
-            val item = IsaacItemDatabase.findItemByName(id.itemName)
-            if (item == null) {
-                ScanOutcome.Unrecognized(id.itemName)
-            } else {
-                identified(
-                    item = item,
-                    confidence = id.confidence,
-                    source = ScanSource.GEMINI,
-                    verdict = id.verdict.ifBlank { null },
-                    runNames = currentRunItemNames,
-                    rawText = null,
-                    geminiAntiSynergy = id.antiSynergy
-                )
-            }
-        } catch (e: ScanException) {
-            ScanOutcome.Failed(e)
+        // No key: offline OCR only.
+        ocrMatch?.takeIf { it.second >= OCR_MATCH_BAR }?.let { return ocrIdentified(it) }
+        return if (text.hasText) {
+            ScanOutcome.Unrecognized(rawText)
+        } else {
+            ScanOutcome.NeedCloserLook(NEED_CLOSER_MESSAGE)
         }
     }
 
@@ -141,8 +150,11 @@ class ScanEngine(
     }
 
     companion object {
-        /** OCR name-match score a candidate must clear to count as an identification. */
+        /** OCR match score to accept as an identification when there's no AI to defer to. */
         const val OCR_MATCH_BAR = 0.82f
+
+        /** OCR match score high enough to trust outright even when a Gemini key is present. */
+        const val STRONG_OCR_BAR = 0.97f
 
         const val NEED_CLOSER_MESSAGE =
             "Couldn't read the item. Move closer, fill the box with the pedestal, and wait for " +
