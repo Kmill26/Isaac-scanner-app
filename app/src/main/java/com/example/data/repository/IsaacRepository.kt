@@ -4,23 +4,51 @@ import android.graphics.Bitmap
 import com.example.data.db.AppDatabase
 import com.example.data.db.RunEntity
 import com.example.data.db.ScanEntity
-import com.example.data.gemini.GeminiVisionService
 import com.example.data.model.IsaacItem
 import com.example.data.model.IsaacItemDatabase
 import com.example.data.model.ScanDetectionResult
+import com.example.data.scan.ScanEngine
+import com.example.data.scan.ScanOutcome
+import com.example.data.scan.messageOrNull
+import com.example.data.scan.toDetectionResult
 import kotlinx.coroutines.flow.Flow
 
 class IsaacRepository(
     private val database: AppDatabase,
-    private val geminiService: GeminiVisionService = GeminiVisionService()
+    private val scanEngine: ScanEngine = ScanEngine()
 ) {
     val recentScans: Flow<List<ScanEntity>> = database.scanDao().getRecentScans()
     val savedRuns: Flow<List<RunEntity>> = database.runDao().getAllSavedRuns()
 
-    suspend fun scanImage(bitmap: Bitmap, currentRunItemNames: List<String>): ScanDetectionResult {
-        val result = geminiService.scanItemFromImage(bitmap, currentRunItemNames)
+    val geminiConfigured: Boolean get() = scanEngine.geminiConfigured()
 
-        // Save into scan history
+    /**
+     * Full pipeline outcome. Phase 4's ViewModel should call this and `when`-branch on
+     * [ScanOutcome] directly. Only a successful [ScanOutcome.Identified] is written to history.
+     */
+    suspend fun identify(bitmap: Bitmap, currentRunItemNames: List<String>): ScanOutcome {
+        val outcome = scanEngine.identify(bitmap, currentRunItemNames)
+        if (outcome is ScanOutcome.Identified) persist(outcome.toDetectionResult())
+        return outcome
+    }
+
+    /**
+     * Legacy shim kept so the pre-Phase-4 ViewModel still compiles. Identified scans return a
+     * real [ScanDetectionResult]; every other outcome throws [ScanException] (via the message).
+     */
+    suspend fun scanImage(bitmap: Bitmap, currentRunItemNames: List<String>): ScanDetectionResult {
+        return when (val outcome = identify(bitmap, currentRunItemNames)) {
+            is ScanOutcome.Identified -> outcome.toDetectionResult()
+            is ScanOutcome.Failed -> throw outcome.error
+            else -> throw IllegalStateException(outcome.messageOrNull() ?: "Scan failed")
+        }
+    }
+
+    /** On-demand run-aware "should I take this?" verdict after a successful OCR match. */
+    suspend fun verdictFor(itemName: String, currentRunItemNames: List<String>): String =
+        scanEngine.verdictFor(itemName, currentRunItemNames)
+
+    private suspend fun persist(result: ScanDetectionResult) {
         database.scanDao().insertScan(
             ScanEntity(
                 itemName = result.detectedName,
@@ -29,8 +57,6 @@ class IsaacRepository(
                 verdict = result.rawGeminiVerdict
             )
         )
-
-        return result
     }
 
     suspend fun saveRun(run: RunEntity): Long {

@@ -107,7 +107,6 @@ dependencies {
   implementation(libs.kotlinx.coroutines.play.services)
   implementation(libs.logging.interceptor)
   implementation(libs.mlkit.text.recognition)
-  implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)

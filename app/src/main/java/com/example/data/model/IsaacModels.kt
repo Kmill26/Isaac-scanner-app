@@ -7,6 +7,18 @@ enum class ItemType(val label: String) {
     TRINKET("Trinket")
 }
 
+/** Where a [ScanDetectionResult] / scan outcome came from. */
+enum class ScanSource {
+    /** On-device ML Kit OCR matched against the bundled catalog. Fully offline. */
+    OCR,
+
+    /** Gemini vision fallback identified the item from the sprite when OCR found no text. */
+    GEMINI,
+
+    /** Gemini produced an on-demand "should I take this?" verdict for an already-matched item. */
+    GEMINI_VERDICT
+}
+
 enum class SynergyRating(val title: String, val emoji: String) {
     GOD_TIER("God Tier Synergy", "🔥"),
     EXCELLENT("Excellent Synergy", "✨"),
@@ -62,6 +74,7 @@ data class ScanDetectionResult(
     val matchedItem: IsaacItem?,
     val activeSynergiesWithRun: List<ActiveRunSynergy>,
     val isAntiSynergyDetected: Boolean,
+    val source: ScanSource = ScanSource.OCR,
     val scanTimestamp: Long = System.currentTimeMillis()
 )
 
