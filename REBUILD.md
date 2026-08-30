@@ -28,10 +28,14 @@ actual TV, and the Gemini paths (no key in this checkout). See "Handoff" at the 
 2. **On-device identification (no network, no key):** capture a frame → crop to the
    on-screen reticle → **ML Kit text recognition** reads the item-name banner Isaac shows
    on the pedestal/pickup → fuzzy-match the text to the bundled DB → show the result.
-3. **Gemini (optional):** only when a key is configured. Used for (a) the run-aware
-   "should I take this?" verdict, (b) fallback identification when OCR finds no readable
-   name (sprite only). Structured JSON output. When no key: clean "add a key to enable AI
-   verdicts" state — **never a fake/random result**.
+3. **Gemini vision — PRIMARY path when a key is configured** (as of the "AI-first" commit).
+   Field testing showed on-device OCR of Isaac's pixel-art pickup-banner font through a phone
+   camera is unreliable. So: OCR still runs first and a near-certain exact hit (`STRONG_OCR_BAR`
+   = 0.97) is taken for free, but anything less defers to Gemini, which reads the stylised
+   banner text / recognises the sprite and returns the run-aware verdict in the same call.
+   OCR is the fallback when Gemini errors or rate-limits. **No key → offline OCR only**, honest
+   "couldn't read it" states, **never a fake/random result**. The scanner HUD shows
+   "AI recognition ON" vs "Offline OCR mode".
 4. **Run tracking:** current-run items persist across process death; synergies +
    transformations computed from the bundled DB.
 
