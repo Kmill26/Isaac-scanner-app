@@ -6,21 +6,28 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,14 +38,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Camera
-import androidx.compose.material.icons.filled.FlashOff
-import androidx.compose.material.icons.filled.FlashOn
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
@@ -68,6 +73,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -76,38 +82,56 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.example.ui.theme.IsaacAlertContainer
-import com.example.ui.theme.IsaacAlertOnContainer
 import com.example.ui.theme.IsaacBorder
 import com.example.ui.theme.IsaacGold
 import com.example.ui.theme.IsaacOnBackground
 import com.example.ui.theme.IsaacOnSurfaceVariant
 import com.example.ui.theme.IsaacPrimaryContainer
 import com.example.ui.theme.IsaacPrimaryCrimson
-import com.example.ui.theme.IsaacSurface
 import com.example.ui.theme.IsaacSurfaceElevated
-import com.example.ui.theme.IsaacTertiaryGlow
-import com.example.ui.theme.IsaacVioletSurface
+import kotlinx.coroutines.delay
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.roundToInt
+
+/**
+ * Shared reticle geometry. Used both by the on-screen overlay [Canvas] and by
+ * [cropToReticle], so the pixels handed to the scan engine are exactly the region
+ * the user framed. The reticle is centered (no vertical nudge).
+ */
+object ScanReticle {
+    /** Reticle width as a fraction of the viewfinder width. */
+    const val WIDTH_FRACTION = 0.78f
+    /** Reticle height as a fraction of its own width. */
+    const val ASPECT = 0.95f
+}
+
+private const val CAPTURE_ERROR_MESSAGE =
+    "Couldn't read the camera frame — hold steady and try again"
 
 @Composable
 fun CameraViewfinder(
     isScanning: Boolean,
     isAutoScanEnabled: Boolean,
-    torchEnabled: Boolean,
-    onTorchToggle: (Boolean) -> Unit,
     onCaptureFrame: (Bitmap) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onCaptureError: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
     var camera by remember { mutableStateOf<Camera?>(null) }
+    var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
     val imageCapture = remember { ImageCapture.Builder().build() }
-    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    val cameraExecutor: ExecutorService = remember { Executors.newSingleThreadExecutor() }
 
     var zoomLevel by remember { mutableFloatStateOf(1.0f) }
+    var maxZoom by remember { mutableFloatStateOf(8.0f) }
     var showZoomSlider by remember { mutableStateOf(false) }
+    var tvMode by remember { mutableStateOf(false) }
+
+    var isCapturing by remember { mutableStateOf(false) }
+    var captureErrorMessage by remember { mutableStateOf<String?>(null) }
 
     // Animated Scan Line
     val infiniteTransition = rememberInfiniteTransition(label = "scanLine")
@@ -121,14 +145,35 @@ fun CameraViewfinder(
         label = "scanLineY"
     )
 
-    // Sync torch with camera
-    LaunchedEffect(torchEnabled, camera) {
-        camera?.cameraControl?.enableTorch(torchEnabled)
+    // Sync zoom ratio with camera (true optical/digital ratio, so the %.1fx label is honest)
+    LaunchedEffect(zoomLevel, maxZoom, camera) {
+        camera?.cameraControl?.setZoomRatio(zoomLevel.coerceIn(1.0f, maxZoom))
     }
 
-    // Sync zoom with camera
-    LaunchedEffect(zoomLevel, camera) {
-        camera?.cameraControl?.setLinearZoom((zoomLevel - 1.0f) / 4.0f)
+    // "TV mode" exposure compensation — dial exposure down ~2 EV for a bright emissive screen.
+    LaunchedEffect(tvMode, camera) {
+        val cam = camera ?: return@LaunchedEffect
+        val exposure = cam.cameraInfo.exposureState
+        if (!exposure.isExposureCompensationSupported) return@LaunchedEffect
+        val target = if (tvMode) {
+            val step = exposure.exposureCompensationStep.toFloat().let { if (it > 0f) it else 1f }
+            (-2f / step).roundToInt()
+                .coerceIn(
+                    exposure.exposureCompensationRange.lower,
+                    exposure.exposureCompensationRange.upper
+                )
+        } else {
+            0
+        }
+        runCatching { cam.cameraControl.setExposureCompensationIndex(target) }
+    }
+
+    // Auto-dismiss the transient capture-error banner
+    LaunchedEffect(captureErrorMessage) {
+        if (captureErrorMessage != null) {
+            delay(3500)
+            captureErrorMessage = null
+        }
     }
 
     DisposableEffect(Unit) {
@@ -144,26 +189,44 @@ fun CameraViewfinder(
                 val previewView = PreviewView(ctx).apply {
                     scaleType = PreviewView.ScaleType.FILL_CENTER
                 }
+                previewViewRef = previewView
 
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
                 cameraProviderFuture.addListener({
                     val cameraProvider = cameraProviderFuture.get()
-                    val preview = Preview.Builder().build().also {
-                        it.surfaceProvider = previewView.surfaceProvider
-                    }
-
-                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
-                    try {
-                        cameraProvider.unbindAll()
-                        camera = cameraProvider.bindToLifecycle(
-                            lifecycleOwner,
-                            cameraSelector,
-                            preview,
-                            imageCapture
-                        )
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+                    // Bind after a layout pass so previewView.viewPort is available and the
+                    // ImageCapture buffer is cropped to match exactly what the user sees.
+                    previewView.post {
+                        val preview = Preview.Builder().build().also {
+                            it.surfaceProvider = previewView.surfaceProvider
+                        }
+                        val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                        try {
+                            cameraProvider.unbindAll()
+                            val groupBuilder = UseCaseGroup.Builder()
+                                .addUseCase(preview)
+                                .addUseCase(imageCapture)
+                            previewView.viewPort?.let { groupBuilder.setViewPort(it) }
+                            camera = cameraProvider.bindToLifecycle(
+                                lifecycleOwner,
+                                cameraSelector,
+                                groupBuilder.build()
+                            )
+                            maxZoom = camera?.cameraInfo?.zoomState?.value?.maxZoomRatio
+                                ?.coerceIn(1.0f, 8.0f) ?: 8.0f
+                            // Meter the center of the frame once the camera is live.
+                            runCatching {
+                                val center = previewView.meteringPointFactory.createPoint(
+                                    previewView.width / 2f,
+                                    previewView.height / 2f
+                                )
+                                camera?.cameraControl?.startFocusAndMetering(
+                                    FocusMeteringAction.Builder(center).build()
+                                )
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
                     }
                 }, ContextCompat.getMainExecutor(ctx))
 
@@ -172,16 +235,39 @@ fun CameraViewfinder(
             modifier = Modifier.fillMaxSize()
         )
 
+        // Gesture layer: pinch-to-zoom + tap-to-focus/meter on the framed area.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(maxZoom) {
+                    detectTransformGestures { _, _, zoom, _ ->
+                        zoomLevel = (zoomLevel * zoom).coerceIn(1.0f, maxZoom)
+                    }
+                }
+                .pointerInput(camera, previewViewRef) {
+                    detectTapGestures { offset ->
+                        val pv = previewViewRef ?: return@detectTapGestures
+                        val cam = camera ?: return@detectTapGestures
+                        runCatching {
+                            val point = pv.meteringPointFactory.createPoint(offset.x, offset.y)
+                            cam.cameraControl.startFocusAndMetering(
+                                FocusMeteringAction.Builder(point).build()
+                            )
+                        }
+                    }
+                }
+        )
+
         // Custom Scanner Overlay Canvas (TV / Pedestal Frame Reticle)
         Canvas(modifier = Modifier.fillMaxSize()) {
             val canvasWidth = size.width
             val canvasHeight = size.height
 
-            // Calculate viewfinder box dimensions (optimized for TV screen / pedestals)
-            val boxWidth = canvasWidth * 0.78f
-            val boxHeight = boxWidth * 0.95f
+            // Reticle box — shared geometry, centered
+            val boxWidth = canvasWidth * ScanReticle.WIDTH_FRACTION
+            val boxHeight = boxWidth * ScanReticle.ASPECT
             val left = (canvasWidth - boxWidth) / 2f
-            val top = (canvasHeight - boxHeight) / 2f - 40f
+            val top = (canvasHeight - boxHeight) / 2f
             val right = left + boxWidth
             val bottom = top + boxHeight
             val centerX = left + boxWidth / 2f
@@ -279,7 +365,7 @@ fun CameraViewfinder(
             )
         }
 
-        // Top Controls: Target Badge, Torch, Zoom
+        // Top Controls: Target Badge, TV mode, Zoom
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -330,23 +416,23 @@ fun CameraViewfinder(
                 }
             }
 
-            // Quick Tool Icons (Flash, Zoom)
+            // Quick Tool Icons (TV mode exposure, Zoom)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Torch toggle
+                // TV mode: exposure compensation for a bright emissive screen
                 FilledIconButton(
-                    onClick = { onTorchToggle(!torchEnabled) },
+                    onClick = { tvMode = !tvMode },
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = if (torchEnabled) IsaacPrimaryCrimson else IsaacSurfaceElevated.copy(alpha = 0.85f),
-                        contentColor = if (torchEnabled) IsaacPrimaryContainer else IsaacOnSurfaceVariant
+                        containerColor = if (tvMode) IsaacPrimaryCrimson else IsaacSurfaceElevated.copy(alpha = 0.85f),
+                        contentColor = if (tvMode) IsaacPrimaryContainer else IsaacOnSurfaceVariant
                     ),
                     modifier = Modifier
                         .size(42.dp)
                         .border(1.dp, IsaacBorder, CircleShape)
-                        .testTag("torch_button")
+                        .testTag("tv_mode_button")
                 ) {
                     Icon(
-                        imageVector = if (torchEnabled) Icons.Default.FlashOn else Icons.Default.FlashOff,
-                        contentDescription = "Toggle Torch"
+                        imageVector = if (tvMode) Icons.Default.Tv else Icons.Default.WbSunny,
+                        contentDescription = "TV Mode (dim exposure)"
                     )
                 }
 
@@ -372,6 +458,7 @@ fun CameraViewfinder(
 
         // Floating Zoom Level Slider (when opened)
         if (showZoomSlider) {
+            val sliderMax = if (maxZoom > 1.05f) maxZoom else 1.05f
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -388,9 +475,9 @@ fun CameraViewfinder(
                 ) {
                     Text(text = "1x", color = Color.White, fontSize = 12.sp)
                     Slider(
-                        value = zoomLevel,
+                        value = zoomLevel.coerceIn(1.0f, sliderMax),
                         onValueChange = { zoomLevel = it },
-                        valueRange = 1.0f..5.0f,
+                        valueRange = 1.0f..sliderMax,
                         modifier = Modifier.weight(1f),
                         colors = SliderDefaults.colors(
                             thumbColor = IsaacPrimaryCrimson,
@@ -408,6 +495,29 @@ fun CameraViewfinder(
             }
         }
 
+        // Transient capture-error banner
+        AnimatedVisibility(
+            visible = captureErrorMessage != null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 140.dp, start = 24.dp, end = 24.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = IsaacPrimaryCrimson.copy(alpha = 0.92f)
+            ) {
+                Text(
+                    text = captureErrorMessage.orEmpty(),
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                )
+            }
+        }
+
         // Bottom Capture / Scan Button HUD
         Box(
             modifier = Modifier
@@ -419,13 +529,30 @@ fun CameraViewfinder(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Floating Shutter / Scan Button with Isaac Pedestal & Crimson Styling
+                val busy = isScanning || isCapturing
                 FloatingActionButton(
                     onClick = {
-                        if (!isScanning) {
-                            capturePhoto(imageCapture, context, cameraExecutor) { bitmap ->
-                                onCaptureFrame(bitmap)
-                            }
+                        if (!busy) {
+                            isCapturing = true
+                            capturePhoto(
+                                imageCapture = imageCapture,
+                                context = context,
+                                executor = cameraExecutor,
+                                onResult = { bitmap ->
+                                    isCapturing = false
+                                    if (bitmap != null) {
+                                        onCaptureFrame(bitmap)
+                                    } else {
+                                        captureErrorMessage = CAPTURE_ERROR_MESSAGE
+                                        onCaptureError(CAPTURE_ERROR_MESSAGE)
+                                    }
+                                },
+                                onError = { message ->
+                                    isCapturing = false
+                                    captureErrorMessage = message
+                                    onCaptureError(message)
+                                }
+                            )
                         }
                     },
                     containerColor = IsaacPrimaryCrimson,
@@ -436,7 +563,7 @@ fun CameraViewfinder(
                         .testTag("scan_capture_button"),
                     shape = CircleShape
                 ) {
-                    if (isScanning) {
+                    if (busy) {
                         CircularProgressIndicator(
                             color = IsaacGold,
                             strokeWidth = 3.dp,
@@ -454,7 +581,11 @@ fun CameraViewfinder(
 
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = if (isScanning) "AI IDENTIFYING ITEM..." else "TAP TO SCAN ITEM",
+                    text = when {
+                        isScanning -> "AI IDENTIFYING ITEM..."
+                        isCapturing -> "CAPTURING FRAME..."
+                        else -> "TAP TO SCAN ITEM"
+                    },
                     color = IsaacOnBackground,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
@@ -465,43 +596,81 @@ fun CameraViewfinder(
     }
 }
 
+/**
+ * Take a single frame. Delivers results on the main thread.
+ *  - [onResult] with a cropped [Bitmap], or `null` when the frame could not be decoded.
+ *  - [onError] with a user-facing string on capture failure / a dead executor.
+ */
 private fun capturePhoto(
     imageCapture: ImageCapture,
     context: Context,
-    executor: java.util.concurrent.Executor,
-    onSuccess: (Bitmap) -> Unit
+    executor: ExecutorService,
+    onResult: (Bitmap?) -> Unit,
+    onError: (String) -> Unit
 ) {
-    imageCapture.takePicture(
-        executor,
-        object : ImageCapture.OnImageCapturedCallback() {
-            override fun onCaptureSuccess(image: ImageProxy) {
-                val bitmap = imageProxyToBitmap(image)
-                image.close()
-                ContextCompat.getMainExecutor(context).execute {
-                    onSuccess(bitmap)
+    val main = ContextCompat.getMainExecutor(context)
+    if (executor.isShutdown) {
+        main.execute { onError(CAPTURE_ERROR_MESSAGE) }
+        return
+    }
+    try {
+        imageCapture.takePicture(
+            executor,
+            object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    val bitmap = try {
+                        imageProxyToBitmap(image)
+                    } catch (t: Throwable) {
+                        t.printStackTrace()
+                        null
+                    } finally {
+                        image.close()
+                    }
+                    main.execute { onResult(bitmap) }
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    exception.printStackTrace()
+                    main.execute { onError(CAPTURE_ERROR_MESSAGE) }
                 }
             }
-
-            override fun onError(exception: ImageCaptureException) {
-                exception.printStackTrace()
-            }
-        }
-    )
+        )
+    } catch (t: Throwable) {
+        t.printStackTrace()
+        main.execute { onError(CAPTURE_ERROR_MESSAGE) }
+    }
 }
 
-private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
-    val plane = image.planes[0]
-    val buffer = plane.buffer
-    val bytes = ByteArray(buffer.remaining())
-    buffer.get(bytes)
-    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-
-    // Handle rotation degrees
-    val rotation = image.imageInfo.rotationDegrees
-    return if (rotation != 0) {
-        val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
-        Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-    } else {
-        bitmap
+/** Decode → un-rotate → crop to the reticle. Returns null on any failure. */
+private fun imageProxyToBitmap(image: ImageProxy): Bitmap? {
+    var bmp: Bitmap = try {
+        image.toBitmap()
+    } catch (t: Throwable) {
+        val buffer = image.planes[0].buffer
+        val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
     }
+
+    // Pixel 10 Pro / Android 16 frequently hands back HARDWARE bitmaps, which cannot
+    // be read back or cropped — copy to a software config first.
+    if (bmp.config == Bitmap.Config.HARDWARE) {
+        bmp = bmp.copy(Bitmap.Config.ARGB_8888, false) ?: return null
+    }
+
+    val rotation = image.imageInfo.rotationDegrees
+    if (rotation != 0) {
+        val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+        bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
+    }
+
+    return cropToReticle(bmp)
+}
+
+/** Centered sub-rectangle matching the [ScanReticle] overlay. */
+fun cropToReticle(src: Bitmap): Bitmap {
+    val cropW = (src.width * ScanReticle.WIDTH_FRACTION).roundToInt().coerceIn(1, src.width)
+    val cropH = (cropW * ScanReticle.ASPECT).roundToInt().coerceIn(1, src.height)
+    val x = ((src.width - cropW) / 2).coerceAtLeast(0)
+    val y = ((src.height - cropH) / 2).coerceAtLeast(0)
+    return runCatching { Bitmap.createBitmap(src, x, y, cropW, cropH) }.getOrDefault(src)
 }

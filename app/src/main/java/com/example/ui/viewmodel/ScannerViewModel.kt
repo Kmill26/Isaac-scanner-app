@@ -80,6 +80,11 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
         _uiState.value = _uiState.value.copy(torchEnabled = enabled)
     }
 
+    /** Surface a camera-capture failure (raised from the viewfinder before a scan starts). */
+    fun reportScanError(message: String) {
+        _uiState.value = _uiState.value.copy(isScanning = false, scanErrorMessage = message)
+    }
+
     fun setZoomLevel(zoom: Float) {
         _uiState.value = _uiState.value.copy(zoomLevel = zoom.coerceIn(1.0f, 5.0f))
     }

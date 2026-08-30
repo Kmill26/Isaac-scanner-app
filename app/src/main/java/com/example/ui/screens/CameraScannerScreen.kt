@@ -135,10 +135,11 @@ fun CameraScannerScreen(
             CameraViewfinder(
                 isScanning = uiState.isScanning,
                 isAutoScanEnabled = uiState.isAutoScanEnabled,
-                torchEnabled = uiState.torchEnabled,
-                onTorchToggle = { viewModel.setTorchEnabled(it) },
                 onCaptureFrame = { bitmap ->
                     viewModel.scanBitmap(bitmap)
+                },
+                onCaptureError = { message ->
+                    viewModel.reportScanError(message)
                 }
             )
         } else {
