@@ -15,4 +15,8 @@
 .cxx
 local.properties
 .env
-debug.keystore
+
+# debug.keystore is intentionally committed so debug APKs from CI and from
+# local builds share one signature (lets you reinstall without uninstalling).
+# It carries the universal Android debug password ("android") and has no
+# security value.
