@@ -174,6 +174,58 @@ fun CurrentRunScreen(
             }
         }
 
+        // Resume-a-persisted-run banner (cold start with a saved current run)
+        if (uiState.resumableRunCount > 0) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, IsaacPrimaryCrimson.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+                        .testTag("resume_run_banner"),
+                    colors = CardDefaults.cardColors(containerColor = IsaacPrimaryContainer),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = "Resume last run?",
+                            color = IsaacPrimaryCrimson,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "You had ${uiState.resumableRunCount} item${if (uiState.resumableRunCount == 1) "" else "s"} in progress when the app last closed.",
+                            color = IsaacOnSurfaceVariant,
+                            fontSize = 12.sp
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Button(
+                                onClick = { viewModel.resumePersistedRun() },
+                                modifier = Modifier.weight(1f).testTag("resume_run_button"),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = IsaacPrimaryCrimson,
+                                    contentColor = IsaacPrimaryContainer
+                                ),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Resume", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                            OutlinedButton(
+                                onClick = { viewModel.discardPersistedRun() },
+                                modifier = Modifier.weight(1f).testTag("start_fresh_button"),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = IsaacOnSurfaceVariant),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, IsaacBorder),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Start fresh", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Active Run Inventory Horizontal / Grid List
         item {
             Card(

@@ -139,7 +139,7 @@ fun CameraScannerScreen(
                     viewModel.scanBitmap(bitmap)
                 },
                 onCaptureError = { message ->
-                    viewModel.reportScanError(message)
+                    viewModel.onCaptureError(message)
                 }
             )
         } else {
@@ -255,12 +255,112 @@ fun CameraScannerScreen(
             uiState.latestScanResult?.let { result ->
                 ScanResultCard(
                     result = result,
-                    currentRunSize = uiState.currentRunItems.size,
+                    aiAvailable = uiState.aiAvailable,
+                    isLoadingVerdict = uiState.isLoadingVerdict,
                     onAddToRun = {
                         result.matchedItem?.let { viewModel.addItemToRun(it) }
                     },
+                    onGetAiVerdict = { viewModel.requestAiVerdict() },
+                    onRescan = { viewModel.rescan() },
                     onDismiss = { viewModel.dismissScanResult() }
                 )
+            }
+        }
+
+        // Scan Error / "need a closer look" banner — dismissible, auto-clears on the next scan.
+        AnimatedVisibility(
+            visible = uiState.latestScanResult == null && uiState.scanErrorMessage != null,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            ScanErrorBanner(
+                message = uiState.scanErrorMessage.orEmpty(),
+                onRescan = { viewModel.rescan() },
+                onDismiss = { viewModel.dismissScanError() }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ScanErrorBanner(
+    message: String,
+    onRescan: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(12.dp)
+            .border(1.dp, IsaacAlertContainer, RoundedCornerShape(20.dp))
+            .testTag("scan_error_banner"),
+        colors = CardDefaults.cardColors(containerColor = IsaacSurfaceElevated),
+        shape = RoundedCornerShape(20.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = IsaacAlertContainer,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = message,
+                        color = IsaacOnSurface,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp
+                    )
+                }
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(IsaacBorder.copy(alpha = 0.5f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Dismiss",
+                        tint = IsaacOnSurfaceVariant,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Button(
+                onClick = onRescan,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("rescan_button"),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = IsaacPrimaryCrimson,
+                    contentColor = IsaacPrimaryContainer
+                ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Rescan", fontWeight = FontWeight.Bold, fontSize = 13.sp)
             }
         }
     }
@@ -269,12 +369,16 @@ fun CameraScannerScreen(
 @Composable
 private fun ScanResultCard(
     result: ScanDetectionResult,
-    currentRunSize: Int,
+    aiAvailable: Boolean,
+    isLoadingVerdict: Boolean,
     onAddToRun: () -> Unit,
+    onGetAiVerdict: () -> Unit,
+    onRescan: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val item = result.matchedItem
+    val inCompendium = item != null
 
     Card(
         modifier = modifier
@@ -400,12 +504,58 @@ private fun ScanResultCard(
             Spacer(modifier = Modifier.height(10.dp))
 
             // AI Real-Time Description & Verdict
-            Text(
-                text = result.rawGeminiVerdict,
-                color = IsaacOnSurface,
-                fontSize = 13.sp,
-                lineHeight = 18.sp
-            )
+            if (!inCompendium) {
+                Text(
+                    text = "\"${result.detectedName}\" isn't in the compendium — can't add it to a run " +
+                        "or check synergies. Try reframing so the item-name banner fills the box.",
+                    color = IsaacOnSurfaceVariant,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+            } else {
+                Text(
+                    text = result.rawGeminiVerdict,
+                    color = IsaacOnSurface,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+            }
+
+            // On-demand AI "should I take this?" verdict — only when a key is configured and we
+            // have not already fetched one for this result.
+            val verdictAlreadyAI = result.source == com.example.data.model.ScanSource.GEMINI ||
+                result.source == com.example.data.model.ScanSource.GEMINI_VERDICT
+            if (aiAvailable && inCompendium && !verdictAlreadyAI) {
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onGetAiVerdict,
+                    enabled = !isLoadingVerdict,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("get_ai_verdict_button"),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = IsaacGold),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, IsaacGold.copy(alpha = 0.6f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (isLoadingVerdict) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            color = IsaacGold,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Asking AI…", fontSize = 12.sp)
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Get AI verdict", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
 
             // Anti-Synergy Alert Banner (if hazardous to current build)
             if (result.isAntiSynergyDetected) {
@@ -499,21 +649,28 @@ private fun ScanResultCard(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 OutlinedButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.weight(1f),
+                    onClick = onRescan,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("rescan_button"),
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = IsaacOnSurfaceVariant
                     ),
                     border = androidx.compose.foundation.BorderStroke(1.dp, IsaacBorder),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text("Skip Item", fontSize = 13.sp)
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Rescan", fontSize = 13.sp)
                 }
 
                 Button(
-                    onClick = {
-                        onAddToRun()
-                    },
+                    onClick = { onAddToRun() },
+                    enabled = inCompendium,
                     modifier = Modifier
                         .weight(1.5f)
                         .testTag("add_item_to_run_button"),
@@ -530,7 +687,11 @@ private fun ScanResultCard(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Take Item (Add)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text(
+                        text = if (inCompendium) "Take Item (Add)" else "Not in compendium",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
                 }
             }
         }

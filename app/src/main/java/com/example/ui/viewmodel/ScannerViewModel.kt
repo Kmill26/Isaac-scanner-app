@@ -2,9 +2,6 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.db.AppDatabase
@@ -14,14 +11,19 @@ import com.example.data.model.ActiveRunSynergy
 import com.example.data.model.IsaacItem
 import com.example.data.model.IsaacItemDatabase
 import com.example.data.model.ScanDetectionResult
+import com.example.data.model.ScanSource
 import com.example.data.model.SynergyRating
 import com.example.data.model.TransformationProgress
 import com.example.data.model.XboxPresetScreen
+import com.example.data.prefs.RunStore
 import com.example.data.repository.IsaacRepository
+import com.example.data.scan.ScanException
+import com.example.data.scan.ScanOutcome
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -32,10 +34,16 @@ data class ScannerUiState(
     val zoomLevel: Float = 1.0f,
     val latestScanResult: ScanDetectionResult? = null,
     val scanErrorMessage: String? = null,
-    val currentRunItems: List<IsaacItem> = listOf(
-        // Default starter items for demonstration
-        IsaacItemDatabase.findItemByName("Soy Milk") ?: IsaacItemDatabase.items[0]
-    ),
+    /** True while an on-demand Gemini "should I take this?" verdict is being fetched. */
+    val isLoadingVerdict: Boolean = false,
+    /** Whether a real Gemini key is configured. Drives visibility of every AI affordance. */
+    val aiAvailable: Boolean = false,
+    val currentRunItems: List<IsaacItem> = emptyList(),
+    /**
+     * On a cold start with a persisted, non-empty current run this is that run's size. The UI
+     * shows a "Resume run (N) / Start fresh" banner; it is cleared once the user picks either way.
+     */
+    val resumableRunCount: Int = 0,
     val compendiumQuery: String = "",
     val compendiumQualityFilter: Int? = null,
     val compendiumPoolFilter: String? = null,
@@ -50,6 +58,11 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
         val db = AppDatabase.getInstance(application)
         IsaacRepository(db)
     }
+
+    private val runStore = RunStore(application)
+
+    /** Items from a persisted run awaiting the user's Resume/Start-fresh choice. */
+    private var pendingResumeItems: List<IsaacItem> = emptyList()
 
     private val _uiState = MutableStateFlow(ScannerUiState())
     val uiState: StateFlow<ScannerUiState> = _uiState.asStateFlow()
@@ -73,7 +86,51 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
     val activeTransformations: StateFlow<List<TransformationProgress>> = MutableStateFlow(emptyList())
 
     init {
+        _uiState.value = _uiState.value.copy(aiAvailable = repository.geminiConfigured)
         recalculateRunStats()
+        restorePersistedRun()
+    }
+
+    /** Read the persisted current run once at startup and offer it as a resumable banner. */
+    private fun restorePersistedRun() {
+        viewModelScope.launch {
+            val ids = runCatching { runStore.currentRunItemIds.first() }.getOrDefault(emptyList())
+            if (ids.isEmpty()) return@launch
+            val items = ids.mapNotNull { IsaacItemDatabase.itemById(it) }
+            if (items.isEmpty()) {
+                runStore.save(emptyList())
+                return@launch
+            }
+            pendingResumeItems = items
+            _uiState.value = _uiState.value.copy(resumableRunCount = items.size)
+        }
+    }
+
+    /** User tapped "Resume run" — adopt the persisted items as the active run. */
+    fun resumePersistedRun() {
+        if (pendingResumeItems.isEmpty()) {
+            _uiState.value = _uiState.value.copy(resumableRunCount = 0)
+            return
+        }
+        _uiState.value = _uiState.value.copy(
+            currentRunItems = pendingResumeItems,
+            resumableRunCount = 0
+        )
+        pendingResumeItems = emptyList()
+        recalculateRunStats()
+        persistCurrentRun()
+    }
+
+    /** User tapped "Start fresh" — drop the persisted run. */
+    fun discardPersistedRun() {
+        pendingResumeItems = emptyList()
+        _uiState.value = _uiState.value.copy(resumableRunCount = 0)
+        viewModelScope.launch { runStore.save(emptyList()) }
+    }
+
+    private fun persistCurrentRun() {
+        val ids = _uiState.value.currentRunItems.map { it.id }
+        viewModelScope.launch { runStore.save(ids) }
     }
 
     fun setTorchEnabled(enabled: Boolean) {
@@ -85,6 +142,13 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
         _uiState.value = _uiState.value.copy(isScanning = false, scanErrorMessage = message)
     }
 
+    /** Alias used by the camera `onError` callback wiring. */
+    fun onCaptureError(message: String) = reportScanError(message)
+
+    fun dismissScanError() {
+        _uiState.value = _uiState.value.copy(scanErrorMessage = null)
+    }
+
     fun setZoomLevel(zoom: Float) {
         _uiState.value = _uiState.value.copy(zoomLevel = zoom.coerceIn(1.0f, 5.0f))
     }
@@ -94,20 +158,112 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
         _uiState.value = _uiState.value.copy(isAutoScanEnabled = newAutoState)
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Scan flow
+    // ---------------------------------------------------------------------------------------------
+
     fun scanBitmap(bitmap: Bitmap) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isScanning = true, scanErrorMessage = null)
-            try {
-                val currentNames = _uiState.value.currentRunItems.map { it.name }
-                val result = repository.scanImage(bitmap, currentNames)
+            _uiState.value = _uiState.value.copy(
+                isScanning = true,
+                scanErrorMessage = null,
+                latestScanResult = null
+            )
+
+            val outcome = try {
+                val runNames = _uiState.value.currentRunItems.map { it.name }
+                repository.identify(bitmap, runNames)
+            } catch (t: Throwable) {
                 _uiState.value = _uiState.value.copy(
                     isScanning = false,
-                    latestScanResult = result
+                    latestScanResult = null,
+                    scanErrorMessage = "Scan failed: ${t.localizedMessage ?: "unexpected error"}"
                 )
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
+                return@launch
+            }
+
+            _uiState.value = when (outcome) {
+                is ScanOutcome.Identified -> _uiState.value.copy(
                     isScanning = false,
-                    scanErrorMessage = "Scan error: ${e.localizedMessage ?: "Unknown error"}"
+                    scanErrorMessage = null,
+                    latestScanResult = outcome.toResult()
+                )
+
+                is ScanOutcome.Unrecognized -> _uiState.value.copy(
+                    isScanning = false,
+                    latestScanResult = null,
+                    scanErrorMessage = "Read \"${outcome.rawText.take(60).trim()}\" but it's not a known " +
+                        "item — line the box up with just the item-name banner and rescan."
+                )
+
+                is ScanOutcome.NeedCloserLook -> _uiState.value.copy(
+                    isScanning = false,
+                    latestScanResult = null,
+                    scanErrorMessage = outcome.message
+                )
+
+                is ScanOutcome.Failed -> _uiState.value.copy(
+                    isScanning = false,
+                    latestScanResult = null,
+                    scanErrorMessage = messageFor(outcome.error)
+                )
+            }
+        }
+    }
+
+    private fun messageFor(error: ScanException): String = when (error) {
+        is ScanException.NoApiKey ->
+            "Couldn't read the name on screen. Add a Gemini API key (see README) to enable AI " +
+                "recognition of item art."
+        else -> error.message
+    }
+
+    private fun ScanOutcome.Identified.toResult(): ScanDetectionResult = ScanDetectionResult(
+        detectedName = item.name,
+        confidence = confidence,
+        rawGeminiVerdict = verdict ?: item.description,
+        matchedItem = item,
+        activeSynergiesWithRun = activeSynergiesWithRun,
+        isAntiSynergyDetected = isAntiSynergyDetected,
+        source = source
+    )
+
+    /**
+     * On-demand run-aware "should I take this?" verdict for the currently shown result. No-op
+     * unless a real Gemini key is configured and the result has a matched catalog item. Failures
+     * surface as [ScannerUiState.scanErrorMessage] and never wipe the result card.
+     */
+    fun requestAiVerdict() {
+        val result = _uiState.value.latestScanResult ?: return
+        val item = result.matchedItem ?: return
+        if (!_uiState.value.aiAvailable || _uiState.value.isLoadingVerdict) return
+
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoadingVerdict = true)
+            try {
+                val runNames = _uiState.value.currentRunItems.map { it.name }
+                val verdict = repository.verdictFor(item.name, runNames)
+                val current = _uiState.value.latestScanResult
+                if (current?.matchedItem?.id == item.id) {
+                    _uiState.value = _uiState.value.copy(
+                        isLoadingVerdict = false,
+                        latestScanResult = current.copy(
+                            rawGeminiVerdict = verdict,
+                            source = ScanSource.GEMINI_VERDICT
+                        )
+                    )
+                } else {
+                    _uiState.value = _uiState.value.copy(isLoadingVerdict = false)
+                }
+            } catch (e: ScanException) {
+                _uiState.value = _uiState.value.copy(
+                    isLoadingVerdict = false,
+                    scanErrorMessage = e.message
+                )
+            } catch (t: Throwable) {
+                _uiState.value = _uiState.value.copy(
+                    isLoadingVerdict = false,
+                    scanErrorMessage = "AI verdict failed: ${t.localizedMessage ?: "unexpected error"}"
                 )
             }
         }
@@ -117,9 +273,16 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isScanning = true, scanErrorMessage = null)
 
-            // Generate an indicative test bitmap representation of TV screen
-            val bitmap = createSyntheticConsoleBitmap(preset.itemName, preset.iconEmoji)
-            val matched = IsaacItemDatabase.findItemByName(preset.itemName) ?: IsaacItemDatabase.items.first()
+            val matched = IsaacItemDatabase.findItemByName(preset.itemName)
+            if (matched == null) {
+                // Preset item isn't in the catalog — skip it rather than fabricate a result.
+                _uiState.value = _uiState.value.copy(
+                    isScanning = false,
+                    scanErrorMessage = "Preset \"${preset.itemName}\" isn't in the item catalog."
+                )
+                return@launch
+            }
+
             val currentItems = _uiState.value.currentRunItems
             val synergies = IsaacItemDatabase.calculateSynergies(matched, currentItems)
             val isAnti = synergies.any { it.rating == SynergyRating.ANTI_SYNERGY }
@@ -127,16 +290,12 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
             val result = ScanDetectionResult(
                 detectedName = matched.name,
                 confidence = 0.98f,
-                rawGeminiVerdict = "Detected on Xbox ${preset.roomType}: ${matched.name} (${matched.quote}). ${matched.description}",
+                rawGeminiVerdict = "Xbox ${preset.roomType}: ${matched.name}. ${matched.description}",
                 matchedItem = matched,
                 activeSynergiesWithRun = synergies,
-                isAntiSynergyDetected = isAnti
+                isAntiSynergyDetected = isAnti,
+                source = ScanSource.OCR
             )
-
-            // Persist scan history
-            try {
-                repository.scanImage(bitmap, currentItems.map { it.name })
-            } catch (_: Exception) {}
 
             _uiState.value = _uiState.value.copy(
                 isScanning = false,
@@ -145,27 +304,22 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private fun createSyntheticConsoleBitmap(itemName: String, emoji: String): Bitmap {
-        val bitmap = Bitmap.createBitmap(400, 400, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        canvas.drawColor(Color.rgb(20, 15, 25))
-
-        val paint = Paint().apply {
-            color = Color.WHITE
-            textSize = 36f
-            textAlign = Paint.Align.CENTER
-            isAntiAlias = true
-        }
-
-        canvas.drawText("Xbox Screen: $itemName", 200f, 100f, paint)
-        paint.textSize = 64f
-        canvas.drawText(emoji, 200f, 220f, paint)
-        return bitmap
-    }
-
     fun dismissScanResult() {
         _uiState.value = _uiState.value.copy(latestScanResult = null)
     }
+
+    /** Dismiss whatever the scanner is showing (result or error) so the shutter is ready again. */
+    fun rescan() {
+        _uiState.value = _uiState.value.copy(
+            latestScanResult = null,
+            scanErrorMessage = null,
+            isScanning = false
+        )
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Run inventory
+    // ---------------------------------------------------------------------------------------------
 
     fun addItemToRun(item: IsaacItem) {
         val current = _uiState.value.currentRunItems.toMutableList()
@@ -176,6 +330,7 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
                 latestScanResult = null
             )
             recalculateRunStats()
+            persistCurrentRun()
         }
     }
 
@@ -184,11 +339,13 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
         current.removeAll { it.id == item.id }
         _uiState.value = _uiState.value.copy(currentRunItems = current)
         recalculateRunStats()
+        persistCurrentRun()
     }
 
     fun clearRun() {
         _uiState.value = _uiState.value.copy(currentRunItems = emptyList())
         recalculateRunStats()
+        persistCurrentRun()
     }
 
     private fun recalculateRunStats() {
@@ -289,8 +446,13 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
     fun loadRun(run: RunEntity) {
         val names = run.itemsCsv.split(",").map { it.trim() }
         val items = names.mapNotNull { IsaacItemDatabase.findItemByName(it) }
-        _uiState.value = _uiState.value.copy(currentRunItems = items)
+        _uiState.value = _uiState.value.copy(
+            currentRunItems = items,
+            resumableRunCount = 0
+        )
+        pendingResumeItems = emptyList()
         recalculateRunStats()
+        persistCurrentRun()
     }
 
     fun clearHistory() {

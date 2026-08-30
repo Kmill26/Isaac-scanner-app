@@ -36,6 +36,11 @@ object IsaacItemDatabase {
         CatalogLoader.load(ctx).items
     }
 
+    private val byId: Map<Int, IsaacItem> by lazy { items.associateBy { it.id } }
+
+    /** Resolve a catalog id back to its item (used to restore a persisted run). */
+    fun itemById(id: Int): IsaacItem? = byId[id]
+
     private val byNormalizedName: Map<String, IsaacItem> by lazy {
         // A handful of names collide after normalization (e.g. the two Broken Shovel halves,
         // Damocles active vs passive). Keep the first catalog entry for a stable lookup.
