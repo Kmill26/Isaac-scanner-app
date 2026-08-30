@@ -246,12 +246,12 @@ fun CameraScannerScreen(
         }
         }
 
-        // Active Run Quick Summary Pill (Floating on top right)
+        // Active Run Quick Summary Pill (Floating on top right, below the viewfinder HUD row)
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
-                .padding(top = 12.dp, end = 16.dp)
+                .padding(top = if (hasCameraPermission) 60.dp else 12.dp, end = 16.dp)
         ) {
             Surface(
                 onClick = onNavigateToRun,
