@@ -10,15 +10,15 @@ data class NameMatch(
 )
 
 /**
- * Accuracy-focused name resolution for OCR / Gemini output over the full 721-item catalog.
+ * Accuracy-focused name resolution for OCR / Gemini output over the full catalog.
  *
  * Ranking, best first:
- *  1. exact normalized match
- *  2. full token containment (every query token in the name, or vice-versa)
- *  3. token-set / Levenshtein similarity >= [THRESHOLD]
- *  4. short curated alias map
+ *  1. exact normalized match (score 1.0)
+ *  2. exact alias match (score 0.98)
+ *  3. high token-containment when multi-token name is matched with noise (e.g. "SACRED HEART L")
+ *  4. fuzzy string similarity (Levenshtein / Jaccard) >= [THRESHOLD]
  *
- * Returns `null` when nothing clears the bar — callers must never fall back to `items.first()`.
+ * Returns `null` when nothing clears the bar — callers must never fall back to an arbitrary item.
  */
 object NameMatcher {
 
@@ -29,6 +29,7 @@ object NameMatcher {
         "sacred" to "sacred heart",
         "csection" to "c section",
         "c-section" to "c section",
+        "c section" to "c section",
         "techx" to "tech x",
         "tech x" to "tech x",
         "godhead" to "godhead",
@@ -43,23 +44,46 @@ object NameMatcher {
         "soy" to "soy milk",
         "soymilk" to "soy milk",
         "d6" to "the d6",
+        "the d6" to "the d6",
         "the d six" to "the d6",
+        "d-6" to "the d6",
+        "d100" to "d100",
+        "d20" to "d20",
+        "d4" to "d4",
+        "d8" to "d8",
+        "d7" to "d7",
+        "d10" to "d10",
+        "d12" to "d12",
+        "dinfinity" to "d-infinity",
+        "d-infinity" to "d-infinity",
+        "d infinity" to "d-infinity",
         "mantle" to "holy mantle",
         "jacob" to "jacob's ladder",
         "pyro" to "pyromaniac",
         "20 20" to "20/20",
-        "2020" to "20/20"
+        "2020" to "20/20",
+        "20/20" to "20/20",
+        "1-up" to "1up!",
+        "1up" to "1up!",
+        "1 up" to "1up!",
+        "1up!" to "1up!",
+        "less than three" to "<3",
+        "<3" to "<3",
+        "cat o nine tails" to "cat-o-nine-tails",
+        "cat-o-nine-tails" to "cat-o-nine-tails",
+        "cat o' nine tails" to "cat-o-nine-tails",
+        "forget me not" to "forget me now",
+        "forget me now" to "forget me now",
+        "spider mod" to "spidermod",
+        "spidermod" to "spidermod"
     )
 
     fun normalize(raw: String): String {
         var s = raw.lowercase().trim()
-        // strip a leading article
         if (s.startsWith("the ")) s = s.substring(4)
-        // drop punctuation, keep alphanumerics and spaces
         s = buildString(s.length) {
             for (ch in s) append(if (ch.isLetterOrDigit() || ch == ' ') ch else ' ')
         }
-        // collapse whitespace
         return s.split(' ').filter { it.isNotEmpty() }.joinToString(" ")
     }
 
@@ -70,46 +94,59 @@ object NameMatcher {
         // Precompute normalized names once per call.
         val normalized = items.map { it to normalize(it.name) }
 
-        // 1. exact
+        // 1. exact normalized match
         normalized.firstOrNull { it.second == q }?.let {
             return NameMatch(it.first, 1f, exact = true)
         }
 
-        val qTokens = q.split(' ').toSet()
+        // 2. exact alias lookup
+        val rawAlias = ALIASES[query.trim().lowercase()] ?: ALIASES[q]
+        if (rawAlias != null) {
+            val normalizedAlias = normalize(rawAlias)
+            normalized.firstOrNull { it.second == normalizedAlias || it.first.name.equals(rawAlias, ignoreCase = true) }?.let {
+                return NameMatch(it.first, 0.98f, exact = false)
+            }
+        }
+
+        val qTokens = q.split(' ').filter { it.isNotEmpty() }.toSet()
+        if (qTokens.isEmpty()) return null
 
         var best: NameMatch? = null
         for ((item, name) in normalized) {
             if (name.isEmpty()) continue
-            val nameTokens = name.split(' ').toSet()
+            val nameTokens = name.split(' ').filter { it.isNotEmpty() }.toSet()
+            if (nameTokens.isEmpty()) continue
 
             val score: Float = when {
-                // 2. full token containment either direction
-                nameTokens.containsAll(qTokens) || qTokens.containsAll(nameTokens) -> {
-                    val ratio = minOf(qTokens.size, nameTokens.size).toFloat() /
-                        maxOf(qTokens.size, nameTokens.size).toFloat()
-                    0.90f + 0.09f * ratio
+                // Multi-token containment with noise:
+                // e.g. query "SACRED HEART L" contains all name tokens "sacred", "heart"
+                nameTokens.size >= 2 && qTokens.containsAll(nameTokens) -> {
+                    val overlapRatio = nameTokens.size.toFloat() / qTokens.size.toFloat()
+                    0.86f + 0.10f * overlapRatio
                 }
-                // 3. fuzzy similarity
-                else -> maxOf(tokenSetRatio(qTokens, nameTokens), levenshteinRatio(q, name))
+                // query tokens contain all name tokens when both are multi-token
+                nameTokens.size >= 2 && qTokens.size >= 2 && nameTokens.containsAll(qTokens) -> {
+                    val overlapRatio = qTokens.size.toFloat() / nameTokens.size.toFloat()
+                    0.86f + 0.10f * overlapRatio
+                }
+                // Fuzzy string similarity
+                else -> {
+                    if (q.length < 4 || name.length < 4) {
+                        0f
+                    } else {
+                        maxOf(tokenSetRatio(qTokens, nameTokens), levenshteinRatio(q, name))
+                    }
+                }
             }
 
             if (score >= THRESHOLD && (best == null || score > best!!.score)) {
                 best = NameMatch(item, score, exact = false)
             }
         }
-        if (best != null) return best
-
-        // 4. alias fallback
-        val aliasTarget = ALIASES[q] ?: ALIASES.entries.firstOrNull { q.contains(it.key) }?.value
-        if (aliasTarget != null) {
-            normalized.firstOrNull { it.second == aliasTarget }?.let {
-                return NameMatch(it.first, THRESHOLD, exact = false)
-            }
-        }
-        return null
+        return best
     }
 
-    /** Jaccard-style token overlap, lightly rewarding shared tokens. */
+    /** Jaccard-style token overlap. */
     private fun tokenSetRatio(a: Set<String>, b: Set<String>): Float {
         if (a.isEmpty() || b.isEmpty()) return 0f
         val inter = a.count { it in b }

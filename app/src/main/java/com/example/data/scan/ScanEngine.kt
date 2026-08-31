@@ -47,7 +47,7 @@ class ScanEngine(
             geminiAntiSynergy = false
         )
 
-        // A near-certain exact OCR hit is trustworthy and free — take it, no API call.
+        // Only a near-certain exact OCR hit (e.g. an actual full pickup banner) bypasses Gemini.
         ocrMatch?.takeIf { it.second >= STRONG_OCR_BAR }?.let { return ocrIdentified(it) }
 
         if (gemini.isConfigured()) {
@@ -154,11 +154,11 @@ class ScanEngine(
         const val OCR_MATCH_BAR = 0.82f
 
         /** OCR match score high enough to trust outright even when a Gemini key is present. */
-        const val STRONG_OCR_BAR = 0.97f
+        const val STRONG_OCR_BAR = 0.99f
 
         const val NEED_CLOSER_MESSAGE =
-            "Couldn't read the item. Move closer, fill the box with the pedestal, and wait for " +
-                "the item-name banner to appear. Add a Gemini API key for AI sprite recognition."
+            "Couldn't identify the item. On console, items have no text before pickup — add a Gemini API key " +
+                "to enable AI sprite recognition, or frame the item-name banner after pickup."
     }
 }
 

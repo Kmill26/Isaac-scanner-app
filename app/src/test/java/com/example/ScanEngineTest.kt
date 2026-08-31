@@ -67,4 +67,22 @@ class ScanEngineTest {
         assertFalse(outcome.isAntiSynergyDetected)
         assertTrue(outcome.activeSynergiesWithRun.any { it.itemB == "Soy Milk" || it.itemA == "Soy Milk" })
     }
+
+    @Test
+    fun `tv screen HUD noise is not identified as an item offline`() = runTest {
+        val outcome = engineReading("KEYS 05", "BOMBS 02").identify(bitmap, emptyList())
+        assertTrue(outcome is ScanOutcome.Unrecognized)
+    }
+
+    @Test
+    fun `cropToReticle accurately scales and centers viewport coordinates`() {
+        val src = Bitmap.createBitmap(3024, 4032, Bitmap.Config.ARGB_8888)
+        val cropped = com.example.ui.components.cropToReticle(src, previewWidth = 1080, previewHeight = 2400)
+        assertTrue(cropped.width < src.width)
+        assertTrue(cropped.height < src.height)
+        // Verify aspect ratio matches reticle aspect (0.95)
+        val expectedAspect = com.example.ui.components.ScanReticle.ASPECT
+        val actualAspect = cropped.height.toFloat() / cropped.width.toFloat()
+        assertEquals(expectedAspect, actualAspect, 0.02f)
+    }
 }

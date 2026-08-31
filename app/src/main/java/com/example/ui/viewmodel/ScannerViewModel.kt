@@ -27,6 +27,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+import com.example.data.prefs.ApiKeyStore
+
 data class ScannerUiState(
     val isScanning: Boolean = false,
     val latestScanResult: ScanDetectionResult? = null,
@@ -35,6 +37,7 @@ data class ScannerUiState(
     val isLoadingVerdict: Boolean = false,
     /** Whether a real Gemini key is configured. Drives visibility of every AI affordance. */
     val aiAvailable: Boolean = false,
+    val showApiKeyDialog: Boolean = false,
     val currentRunItems: List<IsaacItem> = emptyList(),
     /**
      * On a cold start with a persisted, non-empty current run this is that run's size. The UI
@@ -55,6 +58,7 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private val runStore = RunStore(application)
+    private val apiKeyStore = ApiKeyStore(application)
 
     /** Items from a persisted run awaiting the user's Resume/Start-fresh choice. */
     private var pendingResumeItems: List<IsaacItem> = emptyList()
@@ -82,8 +86,44 @@ class ScannerViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         _uiState.value = _uiState.value.copy(aiAvailable = repository.geminiConfigured)
+        viewModelScope.launch {
+            apiKeyStore.apiKeyFlow.collect { key ->
+                ApiKeyStore.customKey = key
+                _uiState.value = _uiState.value.copy(aiAvailable = repository.geminiConfigured)
+            }
+        }
         recalculateRunStats()
         restorePersistedRun()
+    }
+
+    fun openApiKeyDialog() {
+        _uiState.value = _uiState.value.copy(showApiKeyDialog = true)
+    }
+
+    fun closeApiKeyDialog() {
+        _uiState.value = _uiState.value.copy(showApiKeyDialog = false)
+    }
+
+    fun saveGeminiApiKey(key: String) {
+        viewModelScope.launch {
+            apiKeyStore.saveKey(key)
+            ApiKeyStore.customKey = key.trim()
+            _uiState.value = _uiState.value.copy(
+                showApiKeyDialog = false,
+                aiAvailable = repository.geminiConfigured
+            )
+        }
+    }
+
+    fun clearGeminiApiKey() {
+        viewModelScope.launch {
+            apiKeyStore.clearKey()
+            ApiKeyStore.customKey = null
+            _uiState.value = _uiState.value.copy(
+                showApiKeyDialog = false,
+                aiAvailable = repository.geminiConfigured
+            )
+        }
     }
 
     /** Read the persisted current run once at startup and offer it as a resumable banner. */

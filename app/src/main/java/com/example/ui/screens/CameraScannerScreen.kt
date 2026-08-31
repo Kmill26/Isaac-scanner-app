@@ -154,6 +154,7 @@ fun CameraScannerScreen(
             CameraViewfinder(
                 isScanning = uiState.isScanning,
                 aiAvailable = uiState.aiAvailable,
+                onOpenSettings = { viewModel.openApiKeyDialog() },
                 onCaptureFrame = { bitmap ->
                     viewModel.scanBitmap(bitmap)
                 },
@@ -309,6 +310,14 @@ fun CameraScannerScreen(
                 message = uiState.scanErrorMessage.orEmpty(),
                 onRescan = { viewModel.rescan() },
                 onDismiss = { viewModel.dismissScanError() }
+            )
+        }
+
+        if (uiState.showApiKeyDialog) {
+            ApiKeyDialog(
+                onSave = { viewModel.saveGeminiApiKey(it) },
+                onClear = { viewModel.clearGeminiApiKey() },
+                onDismiss = { viewModel.closeApiKeyDialog() }
             )
         }
     }
@@ -892,3 +901,96 @@ private fun CameraPermissionFallback(
         }
     }
 }
+
+@Composable
+private fun ApiKeyDialog(
+    onSave: (String) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var keyText by remember { mutableStateOf(com.example.data.prefs.ApiKeyStore.customKey.orEmpty()) }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = null,
+                    tint = IsaacGold,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    text = "Gemini AI Vision Setup",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Xbox pedestal items have no text before pickup. Paste your free Google AI Studio key below to enable AI sprite recognition on console.",
+                    color = IsaacOnSurfaceVariant,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+                androidx.compose.material3.OutlinedTextField(
+                    value = keyText,
+                    onValueChange = { keyText = it },
+                    label = { Text("Gemini API Key", fontSize = 12.sp) },
+                    placeholder = { Text("AIzaSy...", color = IsaacOnSurfaceVariant) },
+                    singleLine = true,
+                    colors = androidx.compose.material3.TextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedContainerColor = IsaacSurfaceVariant,
+                        unfocusedContainerColor = IsaacSurfaceVariant,
+                        focusedIndicatorColor = IsaacGold,
+                        unfocusedIndicatorColor = IsaacBorder
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(keyText) },
+                colors = ButtonDefaults.buttonColors(containerColor = IsaacPrimaryCrimson),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("Save Key", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (keyText.isNotBlank()) {
+                    OutlinedButton(
+                        onClick = onClear,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = IsaacAlertContainer),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, IsaacAlertContainer.copy(alpha = 0.5f)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Clear", fontSize = 12.sp)
+                    }
+                }
+                OutlinedButton(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = IsaacOnSurfaceVariant),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, IsaacBorder),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Cancel", fontSize = 12.sp)
+                }
+            }
+        },
+        containerColor = IsaacSurfaceElevated,
+        shape = RoundedCornerShape(20.dp)
+    )
+}
+

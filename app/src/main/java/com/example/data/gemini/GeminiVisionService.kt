@@ -3,6 +3,7 @@ package com.example.data.gemini
 import android.graphics.Bitmap
 import android.util.Base64
 import com.example.BuildConfig
+import com.example.data.prefs.ApiKeyStore
 import com.example.data.scan.ScanException
 import com.squareup.moshi.Moshi
 import kotlinx.coroutines.Dispatchers
@@ -39,22 +40,18 @@ interface GeminiApi {
  * Every failure surfaces as a typed [ScanException]. There is no local fallback and no
  * "pick a random item" coalesce — a bad response throws.
  */
-class GeminiVisionService {
+class GeminiVisionService(
+    private val keyProvider: () -> String = { ApiKeyStore.getEffectiveKey() }
+) {
 
     private val moshi: Moshi by lazy { Moshi.Builder().build() }
     private val payloadAdapter by lazy { moshi.adapter(ScanPayload::class.java) }
     private val errorAdapter by lazy { moshi.adapter(GenerateContentResponse::class.java) }
 
-    private val rawKey: String get() = BuildConfig.GEMINI_API_KEY
+    private val rawKey: String get() = keyProvider().trim()
 
     /** True only when a real key is present — not blank, not the placeholders, not "NONE". */
-    fun isConfigured(): Boolean {
-        val k = rawKey.trim()
-        return k.isNotEmpty() &&
-            !k.equals("NONE", ignoreCase = true) &&
-            k != "MY_GEMINI_API_KEY" &&
-            k != "YOUR_API_KEY"
-    }
+    fun isConfigured(): Boolean = ApiKeyStore.isKeyValid(rawKey)
 
     private val api: GeminiApi by lazy {
         val builder = OkHttpClient.Builder()
@@ -63,8 +60,9 @@ class GeminiVisionService {
             .readTimeout(25, TimeUnit.SECONDS)
             .writeTimeout(25, TimeUnit.SECONDS)
             .addInterceptor { chain ->
+                val key = rawKey
                 val req = chain.request().newBuilder()
-                    .addHeader("x-goog-api-key", rawKey.trim())
+                    .addHeader("x-goog-api-key", key)
                     .build()
                 chain.proceed(req)
             }
@@ -109,25 +107,24 @@ class GeminiVisionService {
         }
 
         val prompt = """
-            You are an expert on The Binding of Isaac: Repentance+.
-            This is a photo taken with a phone camera pointed at a TV or monitor running the
-            game — expect glare, moire, motion blur, an off-angle, and low effective resolution.
+            You are a world-class expert on The Binding of Isaac: Repentance+ (PC & console).
+            This is a phone camera capture framed on an Xbox / TV display running the game.
 
-            Identify the single most prominent Isaac item shown: a collectible OR a trinket, on
-            a pedestal, in a shop, a devil/angel reward, the item pickup banner, or held in the
-            HUD. Read the item-name banner text if it is visible; otherwise recognise the sprite.
+            GOAL: Identify the specific Isaac item / collectible / trinket centered in the reticle.
+
+            RULES & FOCUS:
+            1. The item is typically a pixel-art SPRITE floating on top of a stone/gold/wooden item pedestal, on a shop stand, or lying on the floor as a trinket.
+            2. If an item pickup banner or name text is visible, read it. If NOT, identify the item by recognizing the pixel art sprite's visual design (colors, outline, horns, eyes, vials, books, dice, syringes, mushrooms, etc.).
+            3. IGNORE: Isaac the player character, enemies, familiars trailing behind the player, room doors/walls, and HUD counters (health hearts, coins, bombs, keys, map). Only identify the item or trinket on offer.
 
             $inventory
 
-            Respond with JSON only, matching the schema:
-            - itemName: the EXACT official English name, spelled as in-game
-              (e.g. "Brimstone", "Sacred Heart", "The D6", "Wooden Spoon", "Cricket's Head").
-              No commentary, no "(collectible)" suffix.
-            - itemDetected: false only if there is genuinely no Isaac item visible.
-            - confidence: 0..1 — your honest certainty in itemName. Use < 0.4 if you are guessing.
-            - verdict: 1-2 sentences — is it worth taking right now, and the single biggest
-              synergy or anti-synergy with the current run items listed above.
-            - antiSynergy: true if taking it actively hurts the current build.
+            Respond with JSON only matching the schema:
+            - itemName: The EXACT official in-game English name (e.g. "Brimstone", "Sacred Heart", "The D6", "20/20", "C Section", "Godhead", "Mom's Knife", "Magic Mushroom", "Swallowed Penny"). No commentary or suffixes.
+            - itemDetected: true if an Isaac collectible or trinket is visible, false only if no item exists in the frame.
+            - confidence: 0.0 to 1.0 (use < 0.4 if uncertain).
+            - verdict: 1-2 punchy sentences advising whether to take this item for the current build, highlighting the single biggest synergy or anti-synergy with the inventory.
+            - antiSynergy: true only if taking this item severely damages the current build or ruins key synergies.
         """.trimIndent()
 
         val request = GenerateContentRequest(

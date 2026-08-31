@@ -112,4 +112,33 @@ class CatalogTest {
         assertEquals(6, presets.size)
         assertTrue(presets.all { IsaacItemDatabase.findItemByName(it.itemName) != null })
     }
+
+    @Test
+    fun `tv screen HUD noise is rejected and does not match random items`() {
+        assertNull(IsaacItemDatabase.findItemByName("KEYS 05 BOMBS 02"))
+        assertNull(IsaacItemDatabase.findItemByName("HIGH SCORE 120"))
+        assertNull(IsaacItemDatabase.findItemByName("PRESS START"))
+        assertNull(IsaacItemDatabase.findItemByName("GAME OPTIONS"))
+        assertNull(IsaacItemDatabase.findItemByName("STAGE 1 BASEMENT"))
+        assertNull(IsaacItemDatabase.findItemByName("ROOM 04"))
+        assertNull(IsaacItemDatabase.match("KEYS 05 BOMBS 02"))
+    }
+
+    @Test
+    fun `edge-case item names and aliases resolve accurately`() {
+        assertEquals("<3", IsaacItemDatabase.findItemByName("<3")?.name)
+        assertEquals("<3", IsaacItemDatabase.findItemByName("less than three")?.name)
+        assertEquals("1up!", IsaacItemDatabase.findItemByName("1up!")?.name)
+        assertEquals("1up!", IsaacItemDatabase.findItemByName("1-up")?.name)
+        assertEquals("20/20", IsaacItemDatabase.findItemByName("20/20")?.name)
+        assertEquals("20/20", IsaacItemDatabase.findItemByName("20 20")?.name)
+        assertEquals("C Section", IsaacItemDatabase.findItemByName("C-Section")?.name)
+        assertEquals("C Section", IsaacItemDatabase.findItemByName("csection")?.name)
+        assertEquals("The D6", IsaacItemDatabase.findItemByName("The D6")?.name)
+        assertEquals("The D6", IsaacItemDatabase.findItemByName("D6")?.name)
+        assertEquals("D100", IsaacItemDatabase.findItemByName("d100")?.name)
+        assertEquals("Godhead", IsaacItemDatabase.findItemByName("godhead")?.name)
+        assertEquals("Mom's Knife", IsaacItemDatabase.findItemByName("Mom's Knife")?.name)
+        assertEquals("Mom's Knife", IsaacItemDatabase.findItemByName("moms knife")?.name)
+    }
 }

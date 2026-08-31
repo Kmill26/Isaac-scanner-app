@@ -27,6 +27,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -43,6 +44,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Camera
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.WbSunny
@@ -117,6 +119,7 @@ fun CameraViewfinder(
     onCaptureFrame: (Bitmap) -> Unit,
     modifier: Modifier = Modifier,
     aiAvailable: Boolean = false,
+    onOpenSettings: () -> Unit = {},
     onCaptureError: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -377,12 +380,13 @@ fun CameraViewfinder(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Target HUD Indicator Header (Sophisticated Dark styled)
+            // Target HUD Indicator Header (Sophisticated Dark styled) — tap to configure API key
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(20.dp))
                     .background(IsaacSurfaceElevated.copy(alpha = 0.9f))
                     .border(1.dp, IsaacBorder, RoundedCornerShape(20.dp))
+                    .clickable { onOpenSettings() }
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
                 Row(
@@ -397,9 +401,9 @@ fun CameraViewfinder(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Camera,
-                            contentDescription = "Scan",
-                            tint = IsaacPrimaryCrimson,
+                            imageVector = if (aiAvailable) Icons.Default.AutoAwesome else Icons.Default.Camera,
+                            contentDescription = "Scan Mode",
+                            tint = if (aiAvailable) IsaacGold else IsaacPrimaryCrimson,
                             modifier = Modifier.size(14.dp)
                         )
                     }
@@ -411,9 +415,9 @@ fun CameraViewfinder(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = if (aiAvailable) "AI recognition ON" else "Offline OCR mode",
-                            color = IsaacPrimaryCrimson,
-                            fontSize = 12.sp
+                            text = if (aiAvailable) "AI vision ON" else "Offline OCR (tap for AI)",
+                            color = if (aiAvailable) IsaacGold else IsaacPrimaryCrimson,
+                            fontSize = 11.sp
                         )
                     }
                 }
@@ -539,6 +543,7 @@ fun CameraViewfinder(
                             isCapturing = true
                             capturePhoto(
                                 imageCapture = imageCapture,
+                                previewView = previewViewRef,
                                 context = context,
                                 executor = cameraExecutor,
                                 onResult = { bitmap ->
@@ -606,6 +611,7 @@ fun CameraViewfinder(
  */
 private fun capturePhoto(
     imageCapture: ImageCapture,
+    previewView: PreviewView?,
     context: Context,
     executor: ExecutorService,
     onResult: (Bitmap?) -> Unit,
@@ -616,13 +622,15 @@ private fun capturePhoto(
         main.execute { onError(CAPTURE_ERROR_MESSAGE) }
         return
     }
+    val pw = previewView?.width ?: 0
+    val ph = previewView?.height ?: 0
     try {
         imageCapture.takePicture(
             executor,
             object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     val bitmap = try {
-                        imageProxyToBitmap(image)
+                        imageProxyToBitmap(image, pw, ph)
                     } catch (t: Throwable) {
                         t.printStackTrace()
                         null
@@ -645,7 +653,7 @@ private fun capturePhoto(
 }
 
 /** Decode → un-rotate → crop to the reticle. Returns null on any failure. */
-private fun imageProxyToBitmap(image: ImageProxy): Bitmap? {
+private fun imageProxyToBitmap(image: ImageProxy, previewWidth: Int = 0, previewHeight: Int = 0): Bitmap? {
     var bmp: Bitmap = try {
         image.toBitmap()
     } catch (t: Throwable) {
@@ -668,14 +676,38 @@ private fun imageProxyToBitmap(image: ImageProxy): Bitmap? {
         bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
     }
 
-    return cropToReticle(bmp)
+    return cropToReticle(bmp, previewWidth, previewHeight)
 }
 
-/** Centered sub-rectangle matching the [ScanReticle] overlay. */
-fun cropToReticle(src: Bitmap): Bitmap {
-    val cropW = (src.width * ScanReticle.WIDTH_FRACTION).roundToInt().coerceIn(1, src.width)
-    val cropH = (cropW * ScanReticle.ASPECT).roundToInt().coerceIn(1, src.height)
-    val x = ((src.width - cropW) / 2).coerceAtLeast(0)
-    val y = ((src.height - cropH) / 2).coerceAtLeast(0)
+/**
+ * Centered sub-rectangle matching the [ScanReticle] overlay.
+ * When [previewWidth] and [previewHeight] are available, maps the exact viewport
+ * transform from PreviewView's ScaleType.FILL_CENTER to source coordinates.
+ */
+fun cropToReticle(src: Bitmap, previewWidth: Int = 0, previewHeight: Int = 0): Bitmap {
+    val (x, y, cropW, cropH) = if (previewWidth > 0 && previewHeight > 0) {
+        val scale = maxOf(previewWidth.toFloat() / src.width, previewHeight.toFloat() / src.height)
+        val reticleW = previewWidth * ScanReticle.WIDTH_FRACTION
+        val reticleH = reticleW * ScanReticle.ASPECT
+        val reticleLeft = (previewWidth - reticleW) / 2f
+        val reticleTop = (previewHeight - reticleH) / 2f
+
+        val visibleBmpW = previewWidth / scale
+        val visibleBmpH = previewHeight / scale
+        val visibleBmpLeft = (src.width - visibleBmpW) / 2f
+        val visibleBmpTop = (src.height - visibleBmpH) / 2f
+
+        val finalX = (visibleBmpLeft + reticleLeft / scale).roundToInt().coerceIn(0, src.width - 1)
+        val finalY = (visibleBmpTop + reticleTop / scale).roundToInt().coerceIn(0, src.height - 1)
+        val finalW = (reticleW / scale).roundToInt().coerceIn(1, src.width - finalX)
+        val finalH = (reticleH / scale).roundToInt().coerceIn(1, src.height - finalY)
+        listOf(finalX, finalY, finalW, finalH)
+    } else {
+        val w = (src.width * ScanReticle.WIDTH_FRACTION).roundToInt().coerceIn(1, src.width)
+        val h = (w * ScanReticle.ASPECT).roundToInt().coerceIn(1, src.height)
+        val cx = ((src.width - w) / 2).coerceAtLeast(0)
+        val cy = ((src.height - h) / 2).coerceAtLeast(0)
+        listOf(cx, cy, w, h)
+    }
     return runCatching { Bitmap.createBitmap(src, x, y, cropW, cropH) }.getOrDefault(src)
 }
